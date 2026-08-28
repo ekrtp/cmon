@@ -4,3 +4,6 @@ session-map.json
 .env*
 __pycache__/
 *.pyc
+
+# Faz 0 probe stderr yakalamasi — olcum degil, versiyonlanmaz
+docs/probe.err
