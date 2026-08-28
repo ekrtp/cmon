@@ -1,18 +1,26 @@
 {
   "name": "claude-monitor",
-  "version": "0.2.0",
-  "description": "Claude Code oturum monitoru — oturum bazli satirlar, gercek basliklar (fork: ekrtp, upstream: ibrahimokdadov/claudeMonitor)",
+  "version": "0.3.0",
+  "description": "Claude Code session monitor — one row per session, real titles, transcript-derived status (fork of ibrahimokdadov/claudeMonitor)",
   "main": "monitor.js",
-  "bin": { "claude-monitor": "monitor.js" },
+  "bin": {
+    "claude-monitor": "monitor.js"
+  },
   "scripts": {
     "start": "node monitor.js",
     "once": "node monitor.js --once",
     "all": "node monitor.js --once --all",
     "test": "node test/run.js",
-    "probe": "node scripts/probe.js"
+    "probe": "node scripts/probe.js",
+    "themes": "node monitor.js --themes",
+    "fields": "node scripts/probe-fields.js"
   },
   "dependencies": {},
-  "engines": { "node": ">=18" },
-  "os": ["win32"],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "win32"
+  ],
   "private": true
 }

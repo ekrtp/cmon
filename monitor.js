@@ -1,259 +1,356 @@
 #!/usr/bin/env node
-// Claude Code Session Monitor — fork (ekrtp)
+// Claude Code session monitor — fork (ekrtp), upstream: ibrahimokdadov/claudeMonitor
 //
-// Faz 1+2: satirlar artik OTURUM bazli ve basliklar gercek.
-//   Satir kaynagi : ~/.claude/sessions/<PID>.json   (Claude Code'un registry'si, salt okunur)
-//   Baslik        : ~/.claude/projects/<enc>/<sessionId>.jsonl -> ai-title
-//   Durum         : ~/.claude/monitor/state/<sessionId>.json + eski konum (salt okunur)
+// One row per session, with the title you see in the IDE, and a status derived
+// from the transcript instead of from hook side effects.
 //
-// ⭐ HOOK GEREKTIRMEZ. settings.json'a dokunulmadan calisir; hook varsa durum
-// bilgisi (working/waiting/done) daha kesin olur, yoksa JSONL hareketinden
-// turetilir ve bu satirda ⚠️ ile isaretlenir.
+//   rows    <- ~/.claude/sessions/<PID>.json        (Claude Code's registry, read only)
+//   title   <- ~/.claude/projects/<enc>/<id>.jsonl  ai-title
+//   status  <- same transcript, stop_reason / tool_use / interrupt markers
+//   extras  <- model, git branch, effort, queued messages from the same read
 //
-// Kullanim:
-//   node monitor.js            2 sn'de bir tazelenen tablo
-//   node monitor.js --once     tek sefer bas ve cik (test icin)
-//   node monitor.js --wide     tam session id
-//   node monitor.js --flat     proje grubu yok, duz tablo
-//   node monitor.js --all      bos sekmeler + bayat oturumlar dahil her sey
-//   node monitor.js --since=4h son N sure icinde hareket eden oturumlar (vars. 4h)
-// Ortam: NO_COLOR=1 renk yok · GLYPHS=emoji emoji isaretler
+// No hooks required: settings.json is never touched.
 //
-// ⚠️ Olculdu 2026-08-28: VS Code acilista eski sohbet sekmelerini geri yukluyor,
-// her biri kendi claude process'ini ve registry kaydini olusturuyor (makinede 33
-// canli kayit, 45 claude.exe). Bunlarin bir kismi HIC MESAJ GORMEMIS — JSONL
-// dosyasi yok. Varsayilan gorunum onlari gizler, sayisini altta yazar.
+// Usage:
+//   node monitor.js                     live table, refresh from config (2s)
+//   node monitor.js --once              render once and exit
+//   node monitor.js --all               include empty tabs and stale sessions
+//   node monitor.js --since=30m         only sessions active in the last 30m
+//   node monitor.js --theme=light       override the configured theme
+//   node monitor.js --glyphs=emoji      emoji status glyphs
+//   node monitor.js --columns=status,title,model,time
+//   node monitor.js --wide              full session id
+//   node monitor.js --flat              no project grouping
+//   node monitor.js --themes            list available themes and exit
+// Environment: NO_COLOR=1 disables colour entirely.
+//
+// Config: ~/.claude/monitor/config.json — edited live, no restart needed.
 
 const path = require('path');
 const registry = require('./lib/registry');
 const titles = require('./lib/titles');
+const statusLib = require('./lib/status');
 const state = require('./lib/state');
+const ccboard = require('./lib/ccboard');
+const themes = require('./lib/themes');
+const configLib = require('./lib/config');
 
 const argv = process.argv.slice(2);
-const TEK_SEFER = argv.includes('--once');
-const GENIS = argv.includes('--wide');
-const DUZ = argv.includes('--flat');
-const HEPSI = argv.includes('--all');
-
-// --since=90m | 4h | 2g  -> ms
-function sureAyristir(varsayilan) {
-  const a = argv.find((x) => x.startsWith('--since='));
-  if (!a) return varsayilan;
-  const m = /^(\d+)([mhg])$/.exec(a.slice(8).trim());
-  if (!m) return varsayilan;
-  const n = Number(m[1]);
-  return n * (m[2] === 'm' ? 60000 : m[2] === 'h' ? 3600000 : 86400000);
-}
-const PENCERE_MS = sureAyristir(4 * 3600 * 1000);
-
-const YENILEME_MS = 2000;
-const TAZE_MS = 15000;        // JSONL bu sure icinde degistiyse "working" sayilir
-const RENK_VAR = !process.env.NO_COLOR && (process.stdout.isTTY || TEK_SEFER);
-const EMOJI = process.env.GLYPHS === 'emoji';
-
-// --- Tema (Faz 3'te lib/themes.js'e tasinacak) ------------------------------
-const PALET = {
-  working: [122, 162, 247], thinking: [187, 154, 247], waiting: [247, 118, 142],
-  done: [158, 206, 106], idle: [86, 95, 137], header: [192, 202, 245],
-  dim: [86, 95, 137], accent: [224, 175, 104],
+const flag = (name) => argv.includes('--' + name);
+const value = (name) => {
+  const hit = argv.find((a) => a.startsWith(`--${name}=`));
+  return hit ? hit.slice(name.length + 3) : null;
 };
-const R = RENK_VAR ? '\x1b[0m' : '';
-const B = RENK_VAR ? '\x1b[1m' : '';
-function renk(ad) {
-  if (!RENK_VAR) return '';
-  const c = PALET[ad] || PALET.dim;
-  return `\x1b[38;2;${c[0]};${c[1]};${c[2]}m`;
+
+const ONCE = flag('once');
+const ALL = flag('all');
+
+if (flag('themes')) {
+  const list = themes.names();
+  console.log('Available themes: ' + list.join(', '));
+  console.log('Custom themes live in ' + themes.USER_THEME_DIR + ' (<name>.json)');
+  console.log('Required keys: ' + themes.REQUIRED_KEYS.join(', '));
+  process.exit(0);
 }
 
-const ISARET = EMOJI
-  ? { working: '🔧', thinking: '🤔', waiting: '🔔', done: '✅', idle: '·' }
-  : { working: '>>', thinking: '..', waiting: '!!', done: 'OK', idle: '--' };
+// --- configuration ---------------------------------------------------------
+const created = configLib.ensureFile();
+let cfg = configLib.load();
 
-// --- Genislik: ANSI at, emoji/CJK'yi 2 say --------------------------------
+function applyOverrides(base) {
+  const c = { ...base };
+  if (value('theme')) c.theme = value('theme');
+  if (value('glyphs')) c.glyphs = value('glyphs') === 'emoji' ? 'emoji' : 'ascii';
+  if (value('columns')) {
+    const cols = value('columns').split(',').map((s) => s.trim()).filter(Boolean);
+    if (cols.length) c.columns = cols.filter((x) => configLib.COLUMN_NAMES.includes(x));
+  }
+  if (value('since')) c.windowMs = configLib.parseWindow(value('since'));
+  if (flag('wide')) c.wide = true;
+  if (flag('flat')) c.group = false;
+  if (ALL) { c.showEmpty = true; c.windowMs = 0; }
+  return configLib.sanitise(c);
+}
+
+let active = applyOverrides(cfg);
+let theme = themes.resolve(active.theme);
+
+const COLOUR_ON = !process.env.NO_COLOR && (process.stdout.isTTY || ONCE);
+const RESET = COLOUR_ON ? '\x1b[0m' : '';
+const BOLD = COLOUR_ON ? '\x1b[1m' : '';
+
+function paint(role) {
+  if (!COLOUR_ON) return '';
+  const rgb = themes.hexToRgb(theme.colours[role]);
+  if (!rgb) return '';
+  return `\x1b[38;2;${rgb[0]};${rgb[1]};${rgb[2]}m`;
+}
+
+const GLYPHS = {
+  ascii: { asking: '??', interrupted: '||', running: '>>', thinking: '..', done: 'OK', idle: '--' },
+  emoji: { asking: '🔔', interrupted: '⏸️', running: '🔧', thinking: '💭', done: '✅', idle: '·' },
+};
+const glyph = (s) => (GLYPHS[active.glyphs] || GLYPHS.ascii)[s] || '·';
+
+// --- width helpers: strip ANSI, count emoji/CJK as two cells ---------------
 const ANSI = /\x1b\[[0-9;]*m/g;
-function genislik(s) {
+function width(s) {
   let n = 0;
   for (const ch of String(s).replace(ANSI, '')) {
-    const k = ch.codePointAt(0);
-    const gen = (k >= 0x1100 && k <= 0x115f) || (k >= 0x2e80 && k <= 0xa4cf) ||
-      (k >= 0xac00 && k <= 0xd7a3) || (k >= 0xf900 && k <= 0xfaff) ||
-      (k >= 0xfe30 && k <= 0xfe6f) || (k >= 0xff00 && k <= 0xff60) ||
-      (k >= 0x1f300 && k <= 0x1faff) || (k >= 0x2600 && k <= 0x27bf);
-    n += gen ? 2 : 1;
+    const c = ch.codePointAt(0);
+    const wide = (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) ||
+      (c >= 0xac00 && c <= 0xd7a3) || (c >= 0xf900 && c <= 0xfaff) ||
+      (c >= 0xfe30 && c <= 0xfe6f) || (c >= 0xff00 && c <= 0xff60) ||
+      (c >= 0x1f300 && c <= 0x1faff) || (c >= 0x2600 && c <= 0x27bf);
+    n += wide ? 2 : 1;
   }
   return n;
 }
-function kirp(s, en) {
-  s = String(s);
-  if (genislik(s) <= en) return s;
-  let cikti = '';
+function clip(s, max) {
+  s = String(s == null ? '' : s);
+  if (width(s) <= max) return s;
+  let out = '';
   for (const ch of s) {
-    if (genislik(cikti + ch) > en - 1) break;
-    cikti += ch;
+    if (width(out + ch) > max - 1) break;
+    out += ch;
   }
-  return cikti + '…';
+  return out + '…';
 }
-function doldur(s, en) {
-  const k = kirp(s, en);
-  return k + ' '.repeat(Math.max(0, en - genislik(k)));
+function pad(s, max) {
+  const c = clip(s, max);
+  return c + ' '.repeat(Math.max(0, max - width(c)));
 }
-
-function zamanKisa(ms) {
+function ago(ms) {
   if (!ms) return '—';
-  const sn = Math.floor((Date.now() - ms) / 1000);
-  if (sn < 60) return `${sn}s`;
-  if (sn < 3600) return `${Math.floor(sn / 60)}d`;
-  if (sn < 86400) return `${Math.floor(sn / 3600)}s`;
-  return `${Math.floor(sn / 86400)}g`;
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
 }
+const shortModel = (m) => String(m || '').replace(/^claude-/, '').replace(/-\d{8}$/, '');
 
-// --- Veri toplama ----------------------------------------------------------
-function satirlariTopla() {
-  const oturumlar = registry.canliOturumlar();
-  const durumlar = state.durumHaritasi();
+// --- data ------------------------------------------------------------------
+function collect() {
+  const sessions = registry.liveSessions();
+  const hookState = state.bySession();
 
-  const tum = oturumlar.map((o) => {
-    const d = durumlar.get(o.sessionId);
-    const b = titles.cozumle(o.sessionId, o.cwd, d && d.firstPrompt);
-    const hareketMs = Math.max(b.mtimeMs || 0, (d && d.zaman) || 0);
-
-    let durum, durumTuretildi = false;
-    if (d && d.status) {
-      durum = d.status;
-    } else {
-      durum = Date.now() - hareketMs < TAZE_MS ? 'working' : 'idle';
-      durumTuretildi = true;
-    }
+  const rows = sessions.map((s) => {
+    const hook = hookState.get(s.sessionId);
+    const t = titles.resolve(s.sessionId, s.cwd, {
+      hookPrompt: hook && hook.firstPrompt,
+      userTitle: ccboard.name(s.sessionId),
+    });
+    const st = statusLib.derive(t.jsonl, { idleAfterMs: active.idleAfterMs });
+    const lastEvent = Math.max(st.lastEventMs || 0, t.mtimeMs || 0, (hook && hook.when) || 0);
 
     return {
-      sessionId: o.sessionId,
-      proje: o.cwd ? path.basename(o.cwd) : 'bilinmiyor',
-      cwd: o.cwd,
-      baslik: b.title,
-      baslikKaynagi: b.source,
-      durum,
-      durumTuretildi,
-      sonEylem: (d && d.lastAction) || '',
-      rozet: o.entrypoint === 'cli' ? 'cli' : (o.entrypoint === 'claude-vscode' ? 'vsc' : (o.entrypoint || '?').slice(0, 3)),
-      hareketMs,
-      pid: o.pid,
-      // JSONL yok -> oturum hic mesaj gormemis (bos sekme)
-      bos: !b.jsonl,
+      sessionId: s.sessionId,
+      project: s.cwd ? path.basename(s.cwd) : 'unknown',
+      title: t.title,
+      titleSource: t.source,
+      status: st.status,
+      statusSource: st.source,
+      action: st.action || (hook && hook.lastAction) || '',
+      model: shortModel(st.model),
+      branch: st.branch,
+      effort: st.effort,
+      permissionMode: st.permissionMode,
+      queued: st.queued,
+      src: s.entrypoint === 'cli' ? 'cli' : (s.entrypoint === 'claude-vscode' ? 'vsc' : (s.entrypoint || '?').slice(0, 3)),
+      lastEvent,
+      empty: !t.jsonl,          // chat tab that never received a message
+      pid: s.pid,
     };
   }).sort((a, b) => {
-    if (a.durum === 'waiting' && b.durum !== 'waiting') return -1;
-    if (b.durum === 'waiting' && a.durum !== 'waiting') return 1;
-    return b.hareketMs - a.hareketMs;
+    const d = statusLib.ATTENTION[a.status] - statusLib.ATTENTION[b.status];
+    return d !== 0 ? d : b.lastEvent - a.lastEvent;
   });
 
-  if (HEPSI) return { satirlar: tum, gizliBos: 0, gizliBayat: 0 };
+  // Two different sessions can legitimately share a title — measured: a1b2c3d4
+  // and b2c3d4e5 both start from the same prompt and neither has an ai-title, so
+  // both fall back to identical text. Tag such rows with their short id instead
+  // of showing what looks like a duplicate.
+  const seen = new Map();
+  for (const r of rows) seen.set(r.title, (seen.get(r.title) || 0) + 1);
+  for (const r of rows) {
+    if (seen.get(r.title) > 1) r.title = `${r.title} · ${r.sessionId.slice(0, 8)}`;
+  }
 
-  const bos = tum.filter((s) => s.bos);
-  const dolu = tum.filter((s) => !s.bos);
-  const taze = dolu.filter((s) => Date.now() - s.hareketMs < PENCERE_MS);
-  return { satirlar: taze, gizliBos: bos.length, gizliBayat: dolu.length - taze.length };
+  const empty = rows.filter((r) => r.empty);
+  let visible = active.showEmpty ? rows : rows.filter((r) => !r.empty);
+  let stale = 0;
+  if (active.windowMs > 0) {
+    const before = visible.length;
+    visible = visible.filter((r) => Date.now() - r.lastEvent < active.windowMs);
+    stale = before - visible.length;
+  }
+  return { rows: visible, hiddenEmpty: active.showEmpty ? 0 : empty.length, hiddenStale: stale };
 }
 
-// --- Cizim ----------------------------------------------------------------
-function ciz() {
-  const { satirlar, gizliBos, gizliBayat } = satirlariTopla();
-  const en = Math.max(60, Math.min(process.stdout.columns || 100, 160));
+// --- rendering -------------------------------------------------------------
+const FIXED = { status: 13, project: 16, action: 13, model: 10, branch: 14, src: 5, session: 9, time: 5 };
+const HEADS = {
+  status: 'STATUS', title: 'TITLE', project: 'PROJECT', action: 'ACTION',
+  model: 'MODEL', branch: 'BRANCH', src: 'FROM', session: 'SESSION', time: 'AGE',
+};
 
-  const SID = GENIS ? 37 : 9;
-  const SABIT = { durum: 11, eylem: 13, rozet: 5, sid: SID, zaman: 5 };
-  const projeEn = DUZ ? 16 : 0;
-  const bosluk = 2 + (DUZ ? 1 : 0);
-  const baslikEn = Math.max(18, en - 2 - projeEn - SABIT.durum - SABIT.eylem - SABIT.rozet - SABIT.sid - SABIT.zaman - bosluk - 5);
+// The title is the column that carries the meaning, so it never shrinks below
+// MIN_TITLE. When the terminal is too narrow, optional columns are dropped in
+// this order instead of squeezing the title into uselessness.
+const MIN_TITLE = 28;
+const DROP_ORDER = ['branch', 'model', 'project', 'session', 'action', 'src'];
 
-  const cizgi = renk('dim') + '─'.repeat(en - 4) + R;
+function layout(total, requested, indent) {
+  let columns = requested.slice();
+  const widthOf = (c) => (c === 'session' ? (active.wide ? 37 : FIXED.session) : FIXED[c]);
+  const spent = () => columns.filter((c) => c !== 'title')
+    .reduce((sum, c) => sum + widthOf(c) + 1, indent);
+
+  for (const candidate of DROP_ORDER) {
+    if (total - spent() - 4 >= MIN_TITLE) break;
+    if (!columns.includes(candidate)) continue;
+    columns = columns.filter((c) => c !== candidate);
+  }
+
+  const w = {};
+  for (const c of columns) if (c !== 'title') w[c] = widthOf(c);
+  w.title = Math.max(16, total - spent() - 4);
+  return { w, columns };
+}
+
+function cell(row, col) {
+  switch (col) {
+    case 'status': return `${glyph(row.status)} ${row.status}`;
+    case 'title': return row.title;
+    case 'project': return row.project;
+    case 'action': return row.action || '—';
+    case 'model': return row.model || '—';
+    case 'branch': return row.branch || '—';
+    case 'src': return `[${row.src}]`;
+    case 'session': return active.wide ? row.sessionId : row.sessionId.slice(0, 8);
+    case 'time': return ago(row.lastEvent);
+    default: return '';
+  }
+}
+
+function render() {
+  const { rows, hiddenEmpty, hiddenStale } = collect();
+  // COLUMNS env: lets a piped run (tests, CI) exercise a real terminal width.
+  const detected = process.stdout.columns || Number(process.env.COLUMNS) || 100;
+  const total = Math.max(60, Math.min(detected, 200));
+  const indent = active.group ? 2 : 0;
+  const { w, columns: cols } = layout(total, active.columns, indent);
+  const rule = paint('border') + '─'.repeat(total - 4) + RESET;
+
   const out = [];
-  const simdi = new Date().toLocaleTimeString('tr-TR');
+  const clock = new Date().toLocaleTimeString();
+  out.push(`  ${BOLD}${paint('accent')}Claude Monitor${RESET}  ${paint('dim')}${clock} · ` +
+    `${rows.length} session${rows.length === 1 ? '' : 's'} · theme ${theme.name}` +
+    `${theme.fallbackFrom ? ` (unknown "${theme.fallbackFrom}", using dark)` : ''}${RESET}`);
+  out.push('  ' + rule);
 
-  out.push(`  ${B}${renk('accent')}Claude Monitor${R}  ${renk('dim')}${simdi} · ${satirlar.length} oturum${R}`);
-  out.push('  ' + cizgi);
-
-  if (!satirlar.length) {
-    out.push(`  ${renk('dim')}Bu pencerede gosterilecek oturum yok.` +
-      `${gizliBos || gizliBayat ? ` (${gizliBos} bos sekme, ${gizliBayat} bayat — --all ile gor)` : ''}${R}`);
+  if (!rows.length) {
+    const hidden = [];
+    if (hiddenEmpty) hidden.push(`${hiddenEmpty} empty`);
+    if (hiddenStale) hidden.push(`${hiddenStale} stale`);
+    out.push(`  ${paint('dim')}Nothing to show${hidden.length ? ` (${hidden.join(', ')} hidden — try --all)` : ''}.${RESET}`);
     return out.join('\n');
   }
 
-  const basSatiri = (girinti) =>
-    `  ${B}${renk('header')}${girinti}${doldur('DURUM', SABIT.durum)} ${doldur('BASLIK', baslikEn)} ` +
-    `${doldur('EYLEM', SABIT.eylem)} ${doldur('KYNK', SABIT.rozet)} ${doldur('SESSION', SABIT.sid)} ${doldur('SURE', SABIT.zaman)}${R}`;
+  const header = (lead) => `  ${BOLD}${paint('header')}${lead}` +
+    cols.map((c) => pad(HEADS[c], w[c])).join(' ') + RESET;
 
-  const satirCiz = (s, girinti) => {
-    const c = renk(s.durum) || renk('idle');
-    const isaret = ISARET[s.durum] || ISARET.idle;
-    const dur = doldur(`${isaret} ${s.durum}${s.durumTuretildi ? '?' : ''}`, SABIT.durum);
-    const bas = doldur(s.baslik, baslikEn);
-    const eyl = doldur(s.sonEylem || '—', SABIT.eylem);
-    const roz = doldur(`[${s.rozet}]`, SABIT.rozet);
-    const sid = doldur(GENIS ? s.sessionId : s.sessionId.slice(0, 8), SABIT.sid);
-    const sure = doldur(zamanKisa(s.hareketMs), SABIT.zaman);
-    const vurgu = s.durum === 'waiting';
-    const govde = `${girinti}${c}${dur}${R} ${vurgu ? B + c : ''}${bas}${R} ${renk('dim')}${eyl} ${roz} ${sid} ${sure}${R}`;
-    return '  ' + govde + (vurgu ? `${B}${c} <- sen${R}` : '');
+  const line = (row, lead) => {
+    const colour = paint(row.status) || paint('idle');
+    const needsYou = row.status === 'asking' || row.status === 'interrupted';
+    const parts = cols.map((c) => {
+      const text = pad(cell(row, c), w[c]);
+      if (c === 'status') return colour + (needsYou ? BOLD : '') + text + RESET;
+      if (c === 'title') return (needsYou ? BOLD + colour : '') + text + RESET;
+      return paint('dim') + text + RESET;
+    });
+    const badge = row.queued ? `${colour}+${row.queued} queued${RESET}` : '';
+    return '  ' + lead + parts.join(' ') + (badge ? ' ' + badge : '');
   };
 
-  if (DUZ) {
-    out.push(basSatiri(''));
-    out.push('  ' + cizgi);
-    for (const s of satirlar) out.push(satirCiz(s, doldur(s.proje, projeEn) + ' '));
+  if (!active.group) {
+    out.push(header(''));
+    out.push('  ' + rule);
+    for (const r of rows) out.push(line(r, ''));
   } else {
-    // Faz 4: ayni projedeki oturumlari grupla — proje adi bir kez, altinda girintili satirlar
-    const gruplar = new Map();
-    for (const s of satirlar) {
-      if (!gruplar.has(s.proje)) gruplar.set(s.proje, []);
-      gruplar.get(s.proje).push(s);
+    const groups = new Map();
+    for (const r of rows) {
+      if (!groups.has(r.project)) groups.set(r.project, []);
+      groups.get(r.project).push(r);
     }
-    out.push(basSatiri('  '));
-    out.push('  ' + cizgi);
-    for (const [proje, grup] of gruplar) {
-      out.push(`  ${B}${renk('header')}${proje}${R}${renk('dim')} · ${grup.length} oturum${R}`);
-      for (const s of grup) out.push(satirCiz(s, '  '));
+    out.push(header('  '));
+    out.push('  ' + rule);
+    for (const [project, group] of groups) {
+      out.push(`  ${BOLD}${paint('header')}${project}${RESET}${paint('dim')} · ${group.length}${RESET}`);
+      for (const r of group) out.push(line(r, '  '));
     }
   }
 
-  out.push('  ' + cizgi);
-  const turetilen = satirlar.filter((s) => s.durumTuretildi).length;
-  const kaynakSayim = {};
-  for (const s of satirlar) kaynakSayim[s.baslikKaynagi] = (kaynakSayim[s.baslikKaynagi] || 0) + 1;
-  const kaynakMetni = Object.entries(kaynakSayim).map(([k, v]) => `${k}:${v}`).join(' · ');
-  const gizli = [];
-  if (gizliBos) gizli.push(`${gizliBos} bos sekme`);
-  if (gizliBayat) gizli.push(`${gizliBayat} bayat`);
-  out.push(`  ${renk('dim')}baslik ${kaynakMetni}` +
-    `${turetilen ? ` · ${turetilen} durum hook'suz turetildi (?)` : ''}` +
-    `${gizli.length ? ` · gizli: ${gizli.join(', ')} (--all)` : ''}${R}`);
-  if (!TEK_SEFER) out.push(`  ${renk('dim')}${YENILEME_MS / 1000} sn'de bir tazelenir · Ctrl+C ile cik${R}`);
+  out.push('  ' + rule);
+  const sources = {};
+  for (const r of rows) sources[r.titleSource] = (sources[r.titleSource] || 0) + 1;
+  const hidden = [];
+  if (hiddenEmpty) hidden.push(`${hiddenEmpty} empty`);
+  if (hiddenStale) hidden.push(`${hiddenStale} stale`);
+  const dropped = active.columns.filter((c) => !cols.includes(c));
+  out.push(`  ${paint('dim')}titles ${Object.entries(sources).map(([k, v]) => `${k}:${v}`).join(' · ')}` +
+    `${hidden.length ? ` · hidden ${hidden.join(', ')} (--all)` : ''}` +
+    `${dropped.length ? ` · narrow terminal, dropped ${dropped.join(', ')}` : ''}${RESET}`);
+  if (!ONCE) {
+    out.push(`  ${paint('dim')}${active.refreshMs / 1000}s refresh · config ${configLib.FILE}` +
+      `${created.created ? ' (created)' : ''} · Ctrl+C to exit${RESET}`);
+  }
   return out.join('\n');
 }
 
-// Titremesiz cizim: ekrani silme, imleci basa al ve satir sonlarini temizle
-let oncekiSatirSayisi = 0;
-function bas() {
-  const metin = ciz();
-  const satirSayisi = metin.split('\n').length;
-  if (TEK_SEFER) {
-    process.stdout.write(metin + '\n');
+// Flicker-free: home the cursor and clear to end of line instead of wiping the
+// screen on every frame.
+let previousLines = 0;
+function draw() {
+  const text = render();
+  if (ONCE) {
+    process.stdout.write(text + '\n');
     return;
   }
-  const temiz = metin.split('\n').map((s) => s + '\x1b[K').join('\n');
-  process.stdout.write('\x1b[H' + temiz + '\x1b[K');
-  if (satirSayisi < oncekiSatirSayisi) process.stdout.write('\n\x1b[J');
-  oncekiSatirSayisi = satirSayisi;
+  const lines = text.split('\n');
+  process.stdout.write('\x1b[H' + lines.map((l) => l + '\x1b[K').join('\n') + '\x1b[K');
+  if (lines.length < previousLines) process.stdout.write('\n\x1b[J');
+  previousLines = lines.length;
 }
 
-if (TEK_SEFER) {
-  bas();
+if (ONCE) {
+  draw();
 } else {
   process.stdout.write('\x1b[2J');
-  bas();
-  const t = setInterval(bas, YENILEME_MS);
-  process.stdout.on('resize', bas);
+  draw();
+
+  let timer = setInterval(draw, active.refreshMs);
+
+  // Hot reload: editing config.json restyles the running monitor.
+  const unwatch = configLib.watch((next) => {
+    cfg = next;
+    const previousRefresh = active.refreshMs;
+    active = applyOverrides(cfg);
+    theme = themes.resolve(active.theme);
+    if (active.refreshMs !== previousRefresh) {
+      clearInterval(timer);
+      timer = setInterval(draw, active.refreshMs);
+    }
+    process.stdout.write('\x1b[2J');
+    previousLines = 0;
+    draw();
+  });
+
+  process.stdout.on('resize', () => { process.stdout.write('\x1b[2J'); previousLines = 0; draw(); });
   process.on('SIGINT', () => {
-    clearInterval(t);
+    clearInterval(timer);
+    unwatch();
     process.stdout.write('\x1b[?25h\n');
     process.exit(0);
   });
