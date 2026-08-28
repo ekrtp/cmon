@@ -7,7 +7,7 @@ const path = require('path');
 const os   = require('os');
 
 const status      = process.argv[2] || 'idle';
-const sessionsDir = path.join(os.homedir(), '.claude', 'sessions');
+const sessionsDir = path.join(os.homedir(), '.claude', 'claude-monitor-status');
 const mapFile     = path.join(os.homedir(), '.claude', 'session-map.json');
 
 let input = '';

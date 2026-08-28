@@ -7,9 +7,28 @@ const path = require('path');
 const os   = require('os');
 const { execSync } = require('child_process');
 
-const sessionsDir  = path.join(os.homedir(), '.claude', 'sessions');
+const sessionsDir  = path.join(os.homedir(), '.claude', 'claude-monitor-status');
 const projectsDir  = path.join(os.homedir(), '.claude', 'projects');
+const claudeSessionsDir = path.join(os.homedir(), '.claude', 'sessions'); // Claude Code's own registry — read-only
 const STALE_MS     = 2 * 60 * 60 * 1000;
+
+// Read Claude Code's own session registry (*.key files) to map sessionId -> friendly name.
+// Read-only: never write here, this directory belongs to Claude Code itself.
+function loadSessionNames() {
+  const map = {};
+  try {
+    if (!fs.existsSync(claudeSessionsDir)) return map;
+    fs.readdirSync(claudeSessionsDir)
+      .filter(f => f.endsWith('.json'))
+      .forEach(f => {
+        try {
+          const s = JSON.parse(fs.readFileSync(path.join(claudeSessionsDir, f), 'utf8'));
+          if (s && s.sessionId && s.name) map[s.sessionId] = s.name;
+        } catch (_) {}
+      });
+  } catch (_) {}
+  return map;
+}
 
 // Decode Claude's encoded project dir name to a real path
 // e.g. "C--Users-you-CascadeProjects-postwriter" -> "C:\Users\you\CascadeProjects\postwriter"
@@ -120,6 +139,12 @@ function render() {
     }
   });
 
+  // 3. Attach friendly session names from Claude Code's own registry
+  const sessionNames = loadSessionNames();
+  Object.values(fileMap).forEach(s => {
+    if (s.sessionId && sessionNames[s.sessionId]) s.name = sessionNames[s.sessionId];
+  });
+
   let sessions = Object.values(fileMap).sort((a, b) => {
     if (a.status === 'waiting' && b.status !== 'waiting') return -1;
     if (b.status === 'waiting' && a.status !== 'waiting') return  1;
@@ -141,23 +166,24 @@ function render() {
   if (sessions.length === 0) {
     lines.push(`  ${DIM}No active sessions. Start Claude Code in any project.${R}`);
   } else {
-    const COL = { project: 16, status: 13, msg: 14, sid: 37, time: 4 };
-    lines.push(`  ${B}${pad('PROJECT', COL.project)} ${pad('STATUS', COL.status)} ${pad('LAST ACTION', COL.msg)} ${pad('SESSION ID', COL.sid)} TIME${R}`);
+    const COL = { project: 16, name: 14, status: 13, msg: 14, sid: 10, time: 4 };
+    lines.push(`  ${B}${pad('PROJECT', COL.project)} ${pad('NAME', COL.name)} ${pad('STATUS', COL.status)} ${pad('LAST ACTION', COL.msg)} ${pad('SESSION ID', COL.sid)} TIME${R}`);
     lines.push(`  ${divider}`);
 
     for (const s of sessions) {
       const color = colors[s.status] || DIM;
       const icon  = icons[s.status]  || '·';
       const proj  = pad(s.project.substring(0, COL.project - 1), COL.project);
+      const name  = pad((s.name || '-').substring(0, COL.name - 1), COL.name);
       const stat  = pad(`${icon} ${s.status}`, COL.status);
       const msg   = pad((s.message || '').substring(0, COL.msg - 1), COL.msg);
-      const sid   = pad(s.sessionId || '------------------------------------', COL.sid);
+      const sid   = pad(s.sessionId ? s.sessionId.substring(0, 8) : '--------', COL.sid);
       const ago   = timeAgo(s.timestamp);
 
       if (s.status === 'waiting') {
-        lines.push(`  ${B}${color}${proj} ${stat} ${msg} ${DIM}${sid}${R}${B}${color} ${ago}  ← you${R}`);
+        lines.push(`  ${B}${color}${proj} ${name} ${stat} ${msg} ${DIM}${sid}${R}${B}${color} ${ago}  ← you${R}`);
       } else {
-        lines.push(`  ${proj} ${color}${stat}${R} ${DIM}${msg} ${sid} ${ago}${R}`);
+        lines.push(`  ${proj} ${DIM}${name}${R} ${color}${stat}${R} ${DIM}${msg} ${sid} ${ago}${R}`);
       }
     }
   }
