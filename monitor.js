@@ -1,199 +1,260 @@
 #!/usr/bin/env node
-// Claude Code Session Monitor
-// Run in a dedicated terminal: node "$USERPROFILE/.claude/monitor.js"
+// Claude Code Session Monitor — fork (ekrtp)
+//
+// Faz 1+2: satirlar artik OTURUM bazli ve basliklar gercek.
+//   Satir kaynagi : ~/.claude/sessions/<PID>.json   (Claude Code'un registry'si, salt okunur)
+//   Baslik        : ~/.claude/projects/<enc>/<sessionId>.jsonl -> ai-title
+//   Durum         : ~/.claude/monitor/state/<sessionId>.json + eski konum (salt okunur)
+//
+// ⭐ HOOK GEREKTIRMEZ. settings.json'a dokunulmadan calisir; hook varsa durum
+// bilgisi (working/waiting/done) daha kesin olur, yoksa JSONL hareketinden
+// turetilir ve bu satirda ⚠️ ile isaretlenir.
+//
+// Kullanim:
+//   node monitor.js            2 sn'de bir tazelenen tablo
+//   node monitor.js --once     tek sefer bas ve cik (test icin)
+//   node monitor.js --wide     tam session id
+//   node monitor.js --flat     proje grubu yok, duz tablo
+//   node monitor.js --all      bos sekmeler + bayat oturumlar dahil her sey
+//   node monitor.js --since=4h son N sure icinde hareket eden oturumlar (vars. 4h)
+// Ortam: NO_COLOR=1 renk yok · GLYPHS=emoji emoji isaretler
+//
+// ⚠️ Olculdu 2026-08-28: VS Code acilista eski sohbet sekmelerini geri yukluyor,
+// her biri kendi claude process'ini ve registry kaydini olusturuyor (makinede 33
+// canli kayit, 45 claude.exe). Bunlarin bir kismi HIC MESAJ GORMEMIS — JSONL
+// dosyasi yok. Varsayilan gorunum onlari gizler, sayisini altta yazar.
 
-const fs   = require('fs');
 const path = require('path');
-const os   = require('os');
-const { execSync } = require('child_process');
+const registry = require('./lib/registry');
+const titles = require('./lib/titles');
+const state = require('./lib/state');
 
-const sessionsDir  = path.join(os.homedir(), '.claude', 'claude-monitor-status');
-const projectsDir  = path.join(os.homedir(), '.claude', 'projects');
-const claudeSessionsDir = path.join(os.homedir(), '.claude', 'sessions'); // Claude Code's own registry — read-only
-const STALE_MS     = 2 * 60 * 60 * 1000;
+const argv = process.argv.slice(2);
+const TEK_SEFER = argv.includes('--once');
+const GENIS = argv.includes('--wide');
+const DUZ = argv.includes('--flat');
+const HEPSI = argv.includes('--all');
 
-// Read Claude Code's own session registry (*.key files) to map sessionId -> friendly name.
-// Read-only: never write here, this directory belongs to Claude Code itself.
-function loadSessionNames() {
-  const map = {};
-  try {
-    if (!fs.existsSync(claudeSessionsDir)) return map;
-    fs.readdirSync(claudeSessionsDir)
-      .filter(f => f.endsWith('.json'))
-      .forEach(f => {
-        try {
-          const s = JSON.parse(fs.readFileSync(path.join(claudeSessionsDir, f), 'utf8'));
-          if (s && s.sessionId && s.name) map[s.sessionId] = s.name;
-        } catch (_) {}
-      });
-  } catch (_) {}
-  return map;
+// --since=90m | 4h | 2g  -> ms
+function sureAyristir(varsayilan) {
+  const a = argv.find((x) => x.startsWith('--since='));
+  if (!a) return varsayilan;
+  const m = /^(\d+)([mhg])$/.exec(a.slice(8).trim());
+  if (!m) return varsayilan;
+  const n = Number(m[1]);
+  return n * (m[2] === 'm' ? 60000 : m[2] === 'h' ? 3600000 : 86400000);
 }
+const PENCERE_MS = sureAyristir(4 * 3600 * 1000);
 
-// Decode Claude's encoded project dir name to a real path
-// e.g. "C--Users-you-CascadeProjects-postwriter" -> "C:\Users\you\CascadeProjects\postwriter"
-function decodeDirName(dirName) {
-  // Replace first -- with :\ then remaining - with \
-  return dirName.replace('--', ':\\').replace(/-/g, '\\');
-}
+const YENILEME_MS = 2000;
+const TAZE_MS = 15000;        // JSONL bu sure icinde degistiyse "working" sayilir
+const RENK_VAR = !process.env.NO_COLOR && (process.stdout.isTTY || TEK_SEFER);
+const EMOJI = process.env.GLYPHS === 'emoji';
 
-// Find which project dir contains a given session ID
-function sessionIdToProject(sessionId) {
-  if (!fs.existsSync(projectsDir)) return null;
-  try {
-    const dirs = fs.readdirSync(projectsDir);
-    for (const dir of dirs) {
-      const dirPath = path.join(projectsDir, dir);
-      try {
-        const files = fs.readdirSync(dirPath);
-        if (files.some(f => f.startsWith(sessionId))) {
-          const decoded = decodeDirName(dir);
-          // Try to resolve the actual path to get correct basename
-          const segments = decoded.split('\\').filter(Boolean);
-          return segments[segments.length - 1] || dir;
-        }
-      } catch (_) {}
-    }
-  } catch (_) {}
-  return null;
-}
-
-// Get running Claude sessions from process list
-function getLiveSessions() {
-  try {
-    const raw = execSync(
-      'powershell.exe -NonInteractive -Command "Get-WmiObject Win32_Process | Where-Object { $_.CommandLine -like \'*claude-code/cli.js*\' } | Select-Object ProcessId, CommandLine | ConvertTo-Json -Compress"',
-      { timeout: 4000, stdio: ['ignore', 'pipe', 'ignore'] }
-    ).toString().trim();
-    if (!raw) return [];
-    const list = JSON.parse(raw);
-    const procs = Array.isArray(list) ? list : [list];
-    return procs.map(p => {
-      const resumeMatch = p.CommandLine && p.CommandLine.match(/--resume\s+([a-f0-9-]{36})/);
-      const sessionId = resumeMatch ? resumeMatch[1] : null;
-      const project = sessionId ? sessionIdToProject(sessionId) : null;
-      return { pid: p.ProcessId, sessionId, project };
-    }).filter(p => p.project);
-  } catch (_) {
-    return [];
-  }
-}
-
-// ANSI helpers
-const R   = '\x1b[0m';
-const B   = '\x1b[1m';
-const DIM = '\x1b[2m';
-const colors = {
-  working:  '\x1b[33m',
-  thinking: '\x1b[36m',
-  waiting:  '\x1b[91m',
-  done:     '\x1b[32m',
-  idle:     '\x1b[32m',
-  running:  '\x1b[37m',
+// --- Tema (Faz 3'te lib/themes.js'e tasinacak) ------------------------------
+const PALET = {
+  working: [122, 162, 247], thinking: [187, 154, 247], waiting: [247, 118, 142],
+  done: [158, 206, 106], idle: [86, 95, 137], header: [192, 202, 245],
+  dim: [86, 95, 137], accent: [224, 175, 104],
 };
-const icons = {
-  working:  '🔧',
-  thinking: '🤔',
-  waiting:  '⏳',
-  done:     '✅',
-  idle:     '💤',
-  running:  '·',
-};
-
-function timeAgo(ts) {
-  const s = Math.floor((Date.now() - ts) / 1000);
-  if (s < 5)    return 'now';
-  if (s < 60)   return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  return `${Math.floor(s / 3600)}h`;
+const R = RENK_VAR ? '\x1b[0m' : '';
+const B = RENK_VAR ? '\x1b[1m' : '';
+function renk(ad) {
+  if (!RENK_VAR) return '';
+  const c = PALET[ad] || PALET.dim;
+  return `\x1b[38;2;${c[0]};${c[1]};${c[2]}m`;
 }
 
-function pad(str, len) {
-  const visible = str.replace(/\x1b\[[0-9;]*m/g, '');
-  return str + ' '.repeat(Math.max(0, len - visible.length));
+const ISARET = EMOJI
+  ? { working: '🔧', thinking: '🤔', waiting: '🔔', done: '✅', idle: '·' }
+  : { working: '>>', thinking: '..', waiting: '!!', done: 'OK', idle: '--' };
+
+// --- Genislik: ANSI at, emoji/CJK'yi 2 say --------------------------------
+const ANSI = /\x1b\[[0-9;]*m/g;
+function genislik(s) {
+  let n = 0;
+  for (const ch of String(s).replace(ANSI, '')) {
+    const k = ch.codePointAt(0);
+    const gen = (k >= 0x1100 && k <= 0x115f) || (k >= 0x2e80 && k <= 0xa4cf) ||
+      (k >= 0xac00 && k <= 0xd7a3) || (k >= 0xf900 && k <= 0xfaff) ||
+      (k >= 0xfe30 && k <= 0xfe6f) || (k >= 0xff00 && k <= 0xff60) ||
+      (k >= 0x1f300 && k <= 0x1faff) || (k >= 0x2600 && k <= 0x27bf);
+    n += gen ? 2 : 1;
+  }
+  return n;
+}
+function kirp(s, en) {
+  s = String(s);
+  if (genislik(s) <= en) return s;
+  let cikti = '';
+  for (const ch of s) {
+    if (genislik(cikti + ch) > en - 1) break;
+    cikti += ch;
+  }
+  return cikti + '…';
+}
+function doldur(s, en) {
+  const k = kirp(s, en);
+  return k + ' '.repeat(Math.max(0, en - genislik(k)));
 }
 
-function render() {
-  const lines = [];
-  const now   = Date.now();
+function zamanKisa(ms) {
+  if (!ms) return '—';
+  const sn = Math.floor((Date.now() - ms) / 1000);
+  if (sn < 60) return `${sn}s`;
+  if (sn < 3600) return `${Math.floor(sn / 60)}d`;
+  if (sn < 86400) return `${Math.floor(sn / 3600)}s`;
+  return `${Math.floor(sn / 86400)}g`;
+}
 
-  // 1. Read hook-written session files
-  const fileMap = {};
-  if (fs.existsSync(sessionsDir)) {
-    fs.readdirSync(sessionsDir)
-      .filter(f => f.endsWith('.json'))
-      .forEach(f => {
-        try {
-          const s = JSON.parse(fs.readFileSync(path.join(sessionsDir, f), 'utf8'));
-          if (s && (now - s.timestamp) < STALE_MS) fileMap[s.project] = s;
-        } catch (_) {}
-      });
+// --- Veri toplama ----------------------------------------------------------
+function satirlariTopla() {
+  const oturumlar = registry.canliOturumlar();
+  const durumlar = state.durumHaritasi();
+
+  const tum = oturumlar.map((o) => {
+    const d = durumlar.get(o.sessionId);
+    const b = titles.cozumle(o.sessionId, o.cwd, d && d.firstPrompt);
+    const hareketMs = Math.max(b.mtimeMs || 0, (d && d.zaman) || 0);
+
+    let durum, durumTuretildi = false;
+    if (d && d.status) {
+      durum = d.status;
+    } else {
+      durum = Date.now() - hareketMs < TAZE_MS ? 'working' : 'idle';
+      durumTuretildi = true;
+    }
+
+    return {
+      sessionId: o.sessionId,
+      proje: o.cwd ? path.basename(o.cwd) : 'bilinmiyor',
+      cwd: o.cwd,
+      baslik: b.title,
+      baslikKaynagi: b.source,
+      durum,
+      durumTuretildi,
+      sonEylem: (d && d.lastAction) || '',
+      rozet: o.entrypoint === 'cli' ? 'cli' : (o.entrypoint === 'claude-vscode' ? 'vsc' : (o.entrypoint || '?').slice(0, 3)),
+      hareketMs,
+      pid: o.pid,
+      // JSONL yok -> oturum hic mesaj gormemis (bos sekme)
+      bos: !b.jsonl,
+    };
+  }).sort((a, b) => {
+    if (a.durum === 'waiting' && b.durum !== 'waiting') return -1;
+    if (b.durum === 'waiting' && a.durum !== 'waiting') return 1;
+    return b.hareketMs - a.hareketMs;
+  });
+
+  if (HEPSI) return { satirlar: tum, gizliBos: 0, gizliBayat: 0 };
+
+  const bos = tum.filter((s) => s.bos);
+  const dolu = tum.filter((s) => !s.bos);
+  const taze = dolu.filter((s) => Date.now() - s.hareketMs < PENCERE_MS);
+  return { satirlar: taze, gizliBos: bos.length, gizliBayat: dolu.length - taze.length };
+}
+
+// --- Cizim ----------------------------------------------------------------
+function ciz() {
+  const { satirlar, gizliBos, gizliBayat } = satirlariTopla();
+  const en = Math.max(60, Math.min(process.stdout.columns || 100, 160));
+
+  const SID = GENIS ? 37 : 9;
+  const SABIT = { durum: 11, eylem: 13, rozet: 5, sid: SID, zaman: 5 };
+  const projeEn = DUZ ? 16 : 0;
+  const bosluk = 2 + (DUZ ? 1 : 0);
+  const baslikEn = Math.max(18, en - 2 - projeEn - SABIT.durum - SABIT.eylem - SABIT.rozet - SABIT.sid - SABIT.zaman - bosluk - 5);
+
+  const cizgi = renk('dim') + '─'.repeat(en - 4) + R;
+  const out = [];
+  const simdi = new Date().toLocaleTimeString('tr-TR');
+
+  out.push(`  ${B}${renk('accent')}Claude Monitor${R}  ${renk('dim')}${simdi} · ${satirlar.length} oturum${R}`);
+  out.push('  ' + cizgi);
+
+  if (!satirlar.length) {
+    out.push(`  ${renk('dim')}Bu pencerede gosterilecek oturum yok.` +
+      `${gizliBos || gizliBayat ? ` (${gizliBos} bos sekme, ${gizliBayat} bayat — --all ile gor)` : ''}${R}`);
+    return out.join('\n');
   }
 
-  // 2. Merge with live processes — adds sessions not yet touched by hooks
-  getLiveSessions().forEach(p => {
-    if (p.project && !fileMap[p.project]) {
-      fileMap[p.project] = { project: p.project, status: 'running', message: 'idle', sessionId: p.sessionId, timestamp: now };
-    } else if (p.project && fileMap[p.project] && !fileMap[p.project].sessionId) {
-      fileMap[p.project].sessionId = p.sessionId;
-    }
-  });
+  const basSatiri = (girinti) =>
+    `  ${B}${renk('header')}${girinti}${doldur('DURUM', SABIT.durum)} ${doldur('BASLIK', baslikEn)} ` +
+    `${doldur('EYLEM', SABIT.eylem)} ${doldur('KYNK', SABIT.rozet)} ${doldur('SESSION', SABIT.sid)} ${doldur('SURE', SABIT.zaman)}${R}`;
 
-  // 3. Attach friendly session names from Claude Code's own registry
-  const sessionNames = loadSessionNames();
-  Object.values(fileMap).forEach(s => {
-    if (s.sessionId && sessionNames[s.sessionId]) s.name = sessionNames[s.sessionId];
-  });
+  const satirCiz = (s, girinti) => {
+    const c = renk(s.durum) || renk('idle');
+    const isaret = ISARET[s.durum] || ISARET.idle;
+    const dur = doldur(`${isaret} ${s.durum}${s.durumTuretildi ? '?' : ''}`, SABIT.durum);
+    const bas = doldur(s.baslik, baslikEn);
+    const eyl = doldur(s.sonEylem || '—', SABIT.eylem);
+    const roz = doldur(`[${s.rozet}]`, SABIT.rozet);
+    const sid = doldur(GENIS ? s.sessionId : s.sessionId.slice(0, 8), SABIT.sid);
+    const sure = doldur(zamanKisa(s.hareketMs), SABIT.zaman);
+    const vurgu = s.durum === 'waiting';
+    const govde = `${girinti}${c}${dur}${R} ${vurgu ? B + c : ''}${bas}${R} ${renk('dim')}${eyl} ${roz} ${sid} ${sure}${R}`;
+    return '  ' + govde + (vurgu ? `${B}${c} <- sen${R}` : '');
+  };
 
-  let sessions = Object.values(fileMap).sort((a, b) => {
-    if (a.status === 'waiting' && b.status !== 'waiting') return -1;
-    if (b.status === 'waiting' && a.status !== 'waiting') return  1;
-    return b.timestamp - a.timestamp;
-  });
-
-  const waiting = sessions.filter(s => s.status === 'waiting').length;
-  const header  = waiting > 0
-    ? `${B}\x1b[91m Claude Monitor  ⚠  ${waiting} need${waiting > 1 ? 's' : ''} your attention ${R}`
-    : `${B} Claude Monitor ${R}`;
-
-  const width   = 90;
-  const divider = `${DIM}${'─'.repeat(width)}${R}`;
-
-  lines.push('');
-  lines.push(`  ${header}   ${DIM}${new Date().toLocaleTimeString()}${R}`);
-  lines.push(`  ${divider}`);
-
-  if (sessions.length === 0) {
-    lines.push(`  ${DIM}No active sessions. Start Claude Code in any project.${R}`);
+  if (DUZ) {
+    out.push(basSatiri(''));
+    out.push('  ' + cizgi);
+    for (const s of satirlar) out.push(satirCiz(s, doldur(s.proje, projeEn) + ' '));
   } else {
-    const COL = { project: 16, name: 14, status: 13, msg: 14, sid: 10, time: 4 };
-    lines.push(`  ${B}${pad('PROJECT', COL.project)} ${pad('NAME', COL.name)} ${pad('STATUS', COL.status)} ${pad('LAST ACTION', COL.msg)} ${pad('SESSION ID', COL.sid)} TIME${R}`);
-    lines.push(`  ${divider}`);
-
-    for (const s of sessions) {
-      const color = colors[s.status] || DIM;
-      const icon  = icons[s.status]  || '·';
-      const proj  = pad(s.project.substring(0, COL.project - 1), COL.project);
-      const name  = pad((s.name || '-').substring(0, COL.name - 1), COL.name);
-      const stat  = pad(`${icon} ${s.status}`, COL.status);
-      const msg   = pad((s.message || '').substring(0, COL.msg - 1), COL.msg);
-      const sid   = pad(s.sessionId ? s.sessionId.substring(0, 8) : '--------', COL.sid);
-      const ago   = timeAgo(s.timestamp);
-
-      if (s.status === 'waiting') {
-        lines.push(`  ${B}${color}${proj} ${name} ${stat} ${msg} ${DIM}${sid}${R}${B}${color} ${ago}  ← you${R}`);
-      } else {
-        lines.push(`  ${proj} ${DIM}${name}${R} ${color}${stat}${R} ${DIM}${msg} ${sid} ${ago}${R}`);
-      }
+    // Faz 4: ayni projedeki oturumlari grupla — proje adi bir kez, altinda girintili satirlar
+    const gruplar = new Map();
+    for (const s of satirlar) {
+      if (!gruplar.has(s.proje)) gruplar.set(s.proje, []);
+      gruplar.get(s.proje).push(s);
+    }
+    out.push(basSatiri('  '));
+    out.push('  ' + cizgi);
+    for (const [proje, grup] of gruplar) {
+      out.push(`  ${B}${renk('header')}${proje}${R}${renk('dim')} · ${grup.length} oturum${R}`);
+      for (const s of grup) out.push(satirCiz(s, '  '));
     }
   }
 
-  lines.push(`  ${divider}`);
-  lines.push(`  ${DIM}${sessions.length} session(s) · refreshes every 2s · Ctrl+C to exit${R}`);
-  lines.push('');
-
-  process.stdout.write('\x1b[2J\x1b[H' + lines.join('\n'));
+  out.push('  ' + cizgi);
+  const turetilen = satirlar.filter((s) => s.durumTuretildi).length;
+  const kaynakSayim = {};
+  for (const s of satirlar) kaynakSayim[s.baslikKaynagi] = (kaynakSayim[s.baslikKaynagi] || 0) + 1;
+  const kaynakMetni = Object.entries(kaynakSayim).map(([k, v]) => `${k}:${v}`).join(' · ');
+  const gizli = [];
+  if (gizliBos) gizli.push(`${gizliBos} bos sekme`);
+  if (gizliBayat) gizli.push(`${gizliBayat} bayat`);
+  out.push(`  ${renk('dim')}baslik ${kaynakMetni}` +
+    `${turetilen ? ` · ${turetilen} durum hook'suz turetildi (?)` : ''}` +
+    `${gizli.length ? ` · gizli: ${gizli.join(', ')} (--all)` : ''}${R}`);
+  if (!TEK_SEFER) out.push(`  ${renk('dim')}${YENILEME_MS / 1000} sn'de bir tazelenir · Ctrl+C ile cik${R}`);
+  return out.join('\n');
 }
 
-render();
-setInterval(render, 2000);
+// Titremesiz cizim: ekrani silme, imleci basa al ve satir sonlarini temizle
+let oncekiSatirSayisi = 0;
+function bas() {
+  const metin = ciz();
+  const satirSayisi = metin.split('\n').length;
+  if (TEK_SEFER) {
+    process.stdout.write(metin + '\n');
+    return;
+  }
+  const temiz = metin.split('\n').map((s) => s + '\x1b[K').join('\n');
+  process.stdout.write('\x1b[H' + temiz + '\x1b[K');
+  if (satirSayisi < oncekiSatirSayisi) process.stdout.write('\n\x1b[J');
+  oncekiSatirSayisi = satirSayisi;
+}
+
+if (TEK_SEFER) {
+  bas();
+} else {
+  process.stdout.write('\x1b[2J');
+  bas();
+  const t = setInterval(bas, YENILEME_MS);
+  process.stdout.on('resize', bas);
+  process.on('SIGINT', () => {
+    clearInterval(t);
+    process.stdout.write('\x1b[?25h\n');
+    process.exit(0);
+  });
+}
