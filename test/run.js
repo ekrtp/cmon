@@ -351,8 +351,8 @@ console.log('\ntext layout');
 is('a short title stays on one line', ['short one'], text.wrap('short one', 20, 2));
 
 is('a long title breaks on a word boundary',
-  ['GlobalProtect VPN site', 'filtering bypass test'],
-  text.wrap('Network policy review', 22, 2));
+  ['Network policy review', 'across three regions'],
+  text.wrap('Network policy review across three regions', 22, 2));
 
 is('the last allowed line is ellipsized', true,
   text.wrap('one two three four five six seven eight nine ten eleven', 12, 2).pop().endsWith('…'));
