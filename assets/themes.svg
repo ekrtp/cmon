@@ -4,7 +4,7 @@
   <rect y="27" width="787" height="10" fill="#1a1d24"/>
   
   <circle cx="22" cy="18" r="5.5" fill="#ff5f57"/><circle cx="42" cy="18" r="5.5" fill="#febc2e"/><circle cx="62" cy="18" r="5.5" fill="#28c840"/>
-  <text x="393.5" y="22" text-anchor="middle" font-size="11" fill="#6a6a6a">claude monitor — theme cswap</text>
+  <text x="393.5" y="22" text-anchor="middle" font-size="11" fill="#6a6a6a">cmon — theme cswap</text>
   <text xml:space="preserve" fill="#e8e4de">
     
     <tspan x="33.6" y="62" fill="rgb(224,175,104)">dark              </tspan><tspan x="182.2" y="62" fill="rgb(122,162,247)">running</tspan><tspan x="244.8" y="62" fill="rgb(187,154,247)">thinking</tspan><tspan x="315.2" y="62" fill="rgb(158,206,106)">done</tspan><tspan x="354.3" y="62" fill="rgb(224,175,104)">asking</tspan><tspan x="409.0" y="62" fill="rgb(247,118,142)">stopped</tspan><tspan x="471.6" y="62" fill="rgb(86,95,137)">idle</tspan><tspan x="526.3" y="62" fill="rgb(86,95,137)">ctx</tspan><tspan x="557.6" y="62" fill="rgb(86,95,137)">20%</tspan><tspan x="588.9" y="62" fill="rgb(183,194,105)">50%</tspan><tspan x="620.1" y="62" fill="rgb(229,164,112)">80%</tspan><tspan x="651.4" y="62" fill="rgb(242,129,134)">95%</tspan>

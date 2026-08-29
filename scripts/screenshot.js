@@ -138,7 +138,7 @@ function toSvg(rawAnsi, themeName) {
   <rect y="27" width="${w}" height="10" fill="${light ? '#e8e6e1' : '#1a1d24'}"/>
   ${bands}
   ${dot(22, '#ff5f57')}${dot(42, '#febc2e')}${dot(62, '#28c840')}
-  <text x="${w / 2}" y="22" text-anchor="middle" font-size="11" fill="${colours.dim || '#8a8a8a'}">claude monitor — theme ${themeName}</text>
+  <text x="${w / 2}" y="22" text-anchor="middle" font-size="11" fill="${colours.dim || '#8a8a8a'}">cmon — theme ${themeName}</text>
   <text xml:space="preserve" fill="${defaultText}">
     ${body}
   </text>

@@ -471,7 +471,7 @@ function render(snapshot) {
   const out = [];
   // A frozen clock in demo mode keeps regenerated screenshots byte-identical.
   const clock = DEMO ? '09:41:07' : new Date().toLocaleTimeString();
-  out.push(`  ${BOLD}${paint('accent')}Claude Monitor${RESET}  ${paint('dim')}${clock} · ` +
+  out.push(`  ${BOLD}${paint('accent')}cmon${RESET}${paint('dim')} claude monitor${RESET}  ${paint('dim')}${clock} · ` +
     `${rows.length} session${rows.length === 1 ? '' : 's'} · theme ${theme.name}` +
     `${theme.fallbackFrom ? ` (unknown "${theme.fallbackFrom}", using dark)` : ''}` +
     `${active.notifications ? ' · notify on' : ''}${RESET}`);
