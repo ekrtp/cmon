@@ -54,8 +54,8 @@ node monitor.js
 | `node monitor.js --glyphs=emoji` | emoji glyphs and a braille spinner |
 | `node monitor.js --columns=status,title,cost,time` | pick your columns |
 | `node monitor.js --wide` | full session id |
-| `node monitor.js --themes` | list themes and exit |
-| `npm test` | 68 fixture assertions, no network, no deps |
+| `node monitor.js --themes` | preview every theme in colour and exit |
+| `npm test` | 81 fixture assertions, no network, no deps |
 | `npm run config` | show or edit the config |
 | `npm run probe` / `npm run fields` | re-measure the data sources into `docs/` |
 
@@ -125,13 +125,23 @@ same title get their short id appended rather than looking like duplicates.
 
 | Column | Meaning | Source |
 |---|---|---|
-| `ctx` | context occupancy, e.g. `353k 35%` | newest `usage`: input + cache read + cache creation |
+| `ctx` | context occupancy, e.g. `353k 35%`, coloured on a green→amber→red ramp | newest `usage`: input + cache read + cache creation |
 | `cost` | money spent by this session | `token_usage` × `model_pricing` in dashboard.db |
 | `tokens` | all tokens including cache reads | dashboard.db |
 | `tasks` | plan progress, e.g. `3/7`, plus the task in flight after `▸` | `~/.claude/tasks/<session>/*.json` |
 | `agents` | running / total sub-agents | dashboard.db `agents` |
 | `focus` | which project the conversation is about | CLAUDE.md + transcript scoring |
 | `effort` / `mode` | reasoning effort · permission mode | transcript |
+
+The `ctx` cell is the one you act on — it decides which chat to compact — so it
+carries its own colour: a continuous ramp built from the active theme's own
+green, amber and red. Below 35% it stays dim (nothing to think about), then
+warms steadily as the window fills. Every theme gets a ramp that belongs to it.
+
+A title longer than its column **wraps onto a second line** rather than being
+cut off (`titleLines`, default 2; set it to 1 for the old clipping behaviour, up
+to 4 for very long names). The other columns stay on the first line, so the
+table still scans vertically.
 
 On a narrow terminal, columns drop in a fixed order rather than squeezing the
 title; the footer names the ones that went.
@@ -146,6 +156,7 @@ node scripts/config.js                      # show current config
 node scripts/config.js set theme cswap
 node scripts/config.js set groupBy focus
 node scripts/config.js set density compact
+node scripts/config.js set titleLines 1     # stop wrapping long titles
 node scripts/config.js set animationMs 0    # hold the glyphs still
 node scripts/config.js columns +agents -tasks
 node scripts/config.js defaults             # rewrite with defaults
@@ -161,6 +172,7 @@ Every change writes a timestamped backup next to the file first.
   "refreshMs": 2000,
   "animationMs": 220,
   "density": "comfortable",
+  "titleLines": 2,
   "groupBy": "status",
   "window": "4h",
   "showEmpty": false,
@@ -172,6 +184,18 @@ Every change writes a timestamped backup next to the file first.
 ```
 
 ### Themes
+
+**Changing the theme — three ways:**
+
+```powershell
+node monitor.js --themes                    # see them all, in colour, side by side
+node monitor.js --theme=cswap               # just this run
+node scripts/config.js set theme cswap      # permanent; a running monitor picks it up
+```
+
+The third writes `theme` into `~/.claude/monitor/config.json`; the file is
+watched, so an open monitor re-colours on the next frame without a restart. You
+can also edit that file by hand.
 
 Sixteen built in: `dark`, `light`, `cswap`, `cswap-light`, `solarized`,
 `solarized-light`, `nord`, `gruvbox`, `dracula`, `catppuccin`,

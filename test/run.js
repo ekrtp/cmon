@@ -14,6 +14,7 @@ const tasksLib = require('../lib/tasks');
 const notify = require('../lib/notify');
 const ccboard = require('../lib/ccboard');
 const projects = require('../lib/projects');
+const text = require('../lib/text');
 const { isAlive } = require('../lib/platform/win32');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-monitor-test-'));
@@ -344,6 +345,51 @@ is('model, effort and ctx sit next to each other by default',
   configLib.DEFAULTS.columns.slice(
     configLib.DEFAULTS.columns.indexOf('model'),
     configLib.DEFAULTS.columns.indexOf('model') + 3));
+
+// ---------------------------------------------------------------- text
+console.log('\ntext layout');
+is('a short title stays on one line', ['short one'], text.wrap('short one', 20, 2));
+
+is('a long title breaks on a word boundary',
+  ['GlobalProtect VPN site', 'filtering bypass test'],
+  text.wrap('Network policy review', 22, 2));
+
+is('the last allowed line is ellipsized', true,
+  text.wrap('one two three four five six seven eight nine ten eleven', 12, 2).pop().endsWith('…'));
+
+is('no line ever exceeds the column width', true,
+  text.wrap('project-b newsvendor kapasite analizi ve rapor', 18, 3)
+    .every((l) => text.width(l) <= 18));
+
+is('a single unbreakable word is split, not dropped', true,
+  text.wrap('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 10, 2)[0].length > 0);
+
+is('titleLines 1 falls back to clipping', 1,
+  text.wrap('a fairly long title that will not fit', 12, 1).length);
+
+is('an emoji is two cells, a letter is one', 3, text.width('🔧x'));
+is('ANSI escapes are invisible', 3, text.width('\x1b[31mabc\x1b[0m'));
+
+// ---------------------------------------------------------------- ctx ramp
+console.log('\ncontext colour ramp');
+is('a quiet context stays in the dim colour',
+  themes.hexToRgb(themes.BUILT_IN.dark.dim), themes.ramp(themes.BUILT_IN.dark, 0.1));
+
+is('the ramp moves as the context fills', true,
+  (() => {
+    const at = (r) => JSON.stringify(themes.ramp(themes.BUILT_IN.dark, r));
+    return at(0.5) !== at(0.8) && at(0.8) !== at(0.99);
+  })());
+
+is('a full context lands on the interrupted colour',
+  themes.hexToRgb(themes.BUILT_IN.dark.interrupted), themes.ramp(themes.BUILT_IN.dark, 1));
+
+is('mono has no ramp', null, themes.ramp(themes.BUILT_IN.mono, 0.9));
+
+is('every theme produces a ramp except mono', true,
+  Object.entries(themes.BUILT_IN)
+    .filter(([name]) => name !== 'mono')
+    .every(([, t]) => Array.isArray(themes.ramp(t, 0.8))));
 
 // ---------------------------------------------------------------- projects
 console.log('\nproject focus');

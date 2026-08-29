@@ -52,10 +52,29 @@ const value = (name) => {
 const ONCE = flag('once');
 const ALL = flag('all');
 
+// --themes prints a coloured sample of every theme, so you can pick one by
+// looking instead of by name.
 if (flag('themes')) {
-  console.log('Available themes: ' + themes.names().join(', '));
-  console.log('Custom themes live in ' + themes.USER_THEME_DIR + ' (<name>.json)');
-  console.log('Required keys: ' + themes.REQUIRED_KEYS.join(', '));
+  const rgb = (hex) => {
+    const c = themes.hexToRgb(hex);
+    return c ? `\x1b[38;2;${c[0]};${c[1]};${c[2]}m` : '';
+  };
+  const sample = ['running', 'thinking', 'done', 'asking', 'interrupted', 'idle'];
+  console.log('');
+  for (const name of themes.names()) {
+    const t = themes.resolve(name).colours;
+    const swatch = sample.map((role) => `${rgb(t[role])}${role === 'interrupted' ? 'stopped' : role}\x1b[0m`).join(' ');
+    const ctx = [0.2, 0.5, 0.8, 0.95].map((r) => {
+      const c = themes.ramp(t, r);
+      return c ? `\x1b[38;2;${c[0]};${c[1]};${c[2]}m${Math.round(r * 100)}%\x1b[0m` : `${Math.round(r * 100)}%`;
+    }).join(' ');
+    console.log(`  ${rgb(t.accent)}${name.padEnd(18)}\x1b[0m ${swatch}   ${rgb(t.dim)}ctx\x1b[0m ${ctx}`);
+  }
+  console.log('');
+  console.log('  Use one:   node monitor.js --theme=<name>        (just this run)');
+  console.log('             node scripts/config.js set theme <name>   (permanent, applies live)');
+  console.log('  Your own:  ' + themes.USER_THEME_DIR + '\\<name>.json');
+  console.log('  Keys:      ' + themes.REQUIRED_KEYS.join(', '));
   process.exit(0);
 }
 
@@ -119,49 +138,9 @@ function glyph(status) {
   return set[status] || '·';
 }
 
-// --- width helpers: strip ANSI, count emoji/CJK as two cells ---------------
-const ANSI = /\x1b\[[0-9;]*m/g;
-function width(s) {
-  let n = 0;
-  for (const ch of String(s).replace(ANSI, '')) {
-    const c = ch.codePointAt(0);
-    const wide = (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) ||
-      (c >= 0xac00 && c <= 0xd7a3) || (c >= 0xf900 && c <= 0xfaff) ||
-      (c >= 0xfe30 && c <= 0xfe6f) || (c >= 0xff00 && c <= 0xff60) ||
-      (c >= 0x1f300 && c <= 0x1faff) || (c >= 0x2600 && c <= 0x27bf);
-    n += wide ? 2 : 1;
-  }
-  return n;
-}
-function clip(s, max) {
-  s = String(s == null ? '' : s);
-  if (width(s) <= max) return s;
-  let out = '';
-  for (const ch of s) {
-    if (width(out + ch) > max - 1) break;
-    out += ch;
-  }
-  return out + '…';
-}
-function pad(s, max) {
-  const c = clip(s, max);
-  return c + ' '.repeat(Math.max(0, max - width(c)));
-}
-function ago(ms) {
-  if (!ms) return '—';
-  const s = Math.floor((Date.now() - ms) / 1000);
-  if (s < 60) return `${s}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h`;
-  return `${Math.floor(s / 86400)}d`;
-}
-function compactNumber(n) {
-  if (!n) return '—';
-  if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
-  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
-  if (n >= 1e3) return Math.round(n / 1e3) + 'k';
-  return String(n);
-}
+// --- text layout (lib/text.js: measurement, clipping, wrapping) ------------
+const { width, clip, pad, wrap, ago, compactNumber, ANSI } = require('./lib/text');
+
 const shortModel = (m) => String(m || '').replace(/^claude-/, '').replace(/-\d{8}$/, '');
 
 // --- data ------------------------------------------------------------------
@@ -275,6 +254,20 @@ function contextLimit(tokens) {
   return tokens > configured ? 1000000 : configured;
 }
 
+function contextRatio(row) {
+  if (!row.contextTokens) return 0;
+  return row.contextTokens / contextLimit(row.contextTokens);
+}
+
+// The context cell is the one number you act on (compact this chat, or don't),
+// so it gets its own colour: a continuous green -> amber -> red ramp built from
+// the active theme rather than a fixed palette.
+function contextPaint(row) {
+  if (!COLOUR_ON) return '';
+  const c = themes.ramp(theme.colours, contextRatio(row));
+  return c ? `[38;2;${c[0]};${c[1]};${c[2]}m` : '';
+}
+
 function cell(row, col) {
   switch (col) {
     case 'status': return `${glyph(row.status)} ${row.status}`;
@@ -289,8 +282,7 @@ function cell(row, col) {
     case 'time': return ago(row.lastEvent);
     case 'ctx': {
       if (!row.contextTokens) return '—';
-      const pct = Math.round((row.contextTokens / contextLimit(row.contextTokens)) * 100);
-      return `${compactNumber(row.contextTokens)} ${pct}%`;
+      return `${compactNumber(row.contextTokens)} ${Math.round(contextRatio(row) * 100)}%`;
     }
     case 'cost': return row.cost == null ? '—' : '$' + row.cost.toFixed(2);
     case 'tokens': return row.tokens == null ? '—' : compactNumber(row.tokens);
@@ -364,25 +356,37 @@ function render(snapshot) {
   const header = (lead) => `  ${BOLD}${paint('header')}${lead}` +
     cols.map((c) => pad(HEADS[c], w[c])).join(sep) + RESET;
 
-  const line = (row, lead) => {
+  // A row can occupy more than one line: a long title wraps into the TITLE
+  // column instead of being cut off, up to titleLines. Every other column stays
+  // on the first line, so the table still scans vertically.
+  const lines = (row, lead) => {
     const colour = paint(row.status) || paint('idle');
     const needsYou = row.status === 'asking' || row.status === 'interrupted';
-    const parts = cols.map((c) => {
-      const text = pad(cell(row, c), w[c]);
+    const chunks = wrap(row.title, w.title, active.titleLines);
+
+    const cellText = (c, i) => (c === 'title' ? (chunks[i] || '') : (i === 0 ? cell(row, c) : ''));
+    const render1 = (i) => cols.map((c) => {
+      const text = pad(cellText(c, i), w[c]);
+      if (i > 0 && c !== 'title') return text;                       // continuation: blank
       if (c === 'status') return colour + (needsYou ? BOLD : '') + text + RESET;
       if (c === 'title') return (needsYou ? BOLD + colour : '') + text + RESET;
+      if (c === 'ctx') return contextPaint(row) + text + RESET;
       return paint('dim') + text + RESET;
-    });
+    }).join(sep);
+
     const extras = [];
     if (row.queued) extras.push(`${colour}+${row.queued} queued${RESET}`);
     if (row.plan && row.plan.current) extras.push(`${paint('dim')}▸ ${clip(row.plan.current, 30)}${RESET}`);
-    return '  ' + lead + parts.join(sep) + (extras.length ? sep + extras.join(' ') : '');
+
+    const out = ['  ' + lead + render1(0) + (extras.length ? sep + extras.join(' ') : '')];
+    for (let i = 1; i < chunks.length; i++) out.push('  ' + lead + render1(i));
+    return out;
   };
 
   if (!grouped) {
     out.push(header(''));
     out.push('  ' + rule);
-    for (const r of rows) out.push(line(r, ''));
+    for (const r of rows) out.push(...lines(r, ''));
   } else {
     out.push(header('  '));
     out.push('  ' + rule);
@@ -392,7 +396,7 @@ function render(snapshot) {
         : group.key;
       const colour = active.groupBy === 'status' ? (paint(group.key) || paint('header')) : paint('header');
       out.push(`  ${BOLD}${colour}${label}${RESET}${paint('dim')} · ${group.rows.length}${RESET}`);
-      for (const r of group.rows) out.push(line(r, '  '));
+      for (const r of group.rows) out.push(...lines(r, '  '));
       if (roomy) out.push('');
     }
     if (roomy) out.pop();   // no trailing blank before the footer rule
