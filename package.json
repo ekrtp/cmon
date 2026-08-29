@@ -1,6 +1,6 @@
 {
   "name": "claude-monitor",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Claude Code session monitor — one row per session, real titles, transcript-derived status (fork of ibrahimokdadov/claudeMonitor)",
   "main": "monitor.js",
   "bin": {
@@ -13,7 +13,10 @@
     "test": "node test/run.js",
     "probe": "node scripts/probe.js",
     "themes": "node monitor.js --themes",
-    "fields": "node scripts/probe-fields.js"
+    "fields": "node scripts/probe-fields.js",
+    "config": "node scripts/config.js",
+    "install-hooks": "node scripts/install-hooks.js",
+    "uninstall-hooks": "node scripts/uninstall-hooks.js"
   },
   "dependencies": {},
   "engines": {

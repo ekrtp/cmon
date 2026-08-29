@@ -10,6 +10,9 @@ const titles = require('../lib/titles');
 const statusLib = require('../lib/status');
 const themes = require('../lib/themes');
 const configLib = require('../lib/config');
+const tasksLib = require('../lib/tasks');
+const notify = require('../lib/notify');
+const ccboard = require('../lib/ccboard');
 const { isAlive } = require('../lib/platform/win32');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-monitor-test-'));
@@ -179,6 +182,93 @@ is('a long-running tool past idleAfterMs reads as idle', 'idle',
   ]), { idleAfterMs: 1, now: Date.now() + 60000 }).status);
 
 is('missing transcript returns idle without throwing', 'idle', derive(null).status);
+
+// ---------------------------------------------------------------- context
+console.log('\ncontext size');
+is('context tokens = input + cache_read + cache_creation', 150000,
+  statusLib.derive(fixture('c1.jsonl', [
+    JSON.stringify({
+      type: 'assistant',
+      message: {
+        model: 'claude-opus-5', stop_reason: 'end_turn',
+        content: [{ type: 'text', text: 'hi' }],
+        usage: { input_tokens: 20000, cache_read_input_tokens: 120000, cache_creation_input_tokens: 10000 },
+      },
+    }),
+  ]), { now: Date.now() }).contextTokens);
+
+is('no usage block means no context reading', 0,
+  statusLib.derive(fixture('c2.jsonl', [userLine('hello')]), { now: Date.now() }).contextTokens);
+
+// ---------------------------------------------------------------- tasks
+console.log('\ntask progress');
+function taskDir(name, tasks) {
+  const dir = path.join(tmp, name);
+  fs.mkdirSync(dir, { recursive: true });
+  tasks.forEach((t, i) => fs.writeFileSync(path.join(dir, `${i + 1}.json`), JSON.stringify(t), 'utf8'));
+  return dir;
+}
+
+is('counts completed, in progress and pending', [4, 2, 1, 1],
+  (() => {
+    const p = tasksLib.progressIn(taskDir('tasks-a', [
+      { id: 1, subject: 'one', status: 'completed' },
+      { id: 2, subject: 'two', status: 'completed' },
+      { id: 3, subject: 'three', status: 'in_progress', activeForm: 'Doing three' },
+      { id: 4, subject: 'four', status: 'pending' },
+    ]));
+    return [p.total, p.completed, p.inProgress, p.pending];
+  })());
+
+is('reports the task in progress', 'Doing three',
+  tasksLib.progressIn(path.join(tmp, 'tasks-a')).current);
+
+is('a corrupt task file is skipped, the rest still count', 1,
+  (() => {
+    const dir = taskDir('tasks-b', [{ id: 1, subject: 'ok', status: 'completed' }]);
+    fs.writeFileSync(path.join(dir, '2.json'), '{ broken', 'utf8');
+    return tasksLib.progressIn(dir).total;
+  })());
+
+is('an empty task directory returns null', null,
+  tasksLib.progressIn(path.join(tmp, 'no-such-task-dir')));
+
+// ---------------------------------------------------------------- notify
+console.log('\nnotifications');
+const outbox = [];
+const fakeSend = (title, message, project) => { outbox.push({ title, message, project }); return true; };
+const nrow = (id, status) => ({ sessionId: id, status, title: 'T ' + id, project: 'p' });
+
+notify.reset();
+is('the first frame never notifies (it only primes)', 0,
+  notify.check([nrow('a', 'asking')], true, fakeSend));
+
+notify.reset();
+notify.check([nrow('b', 'running')], true, fakeSend);
+is('a transition into asking notifies once', 1,
+  notify.check([nrow('b', 'asking')], true, fakeSend));
+
+is('staying in the same status does not notify again', 0,
+  notify.check([nrow('b', 'asking')], true, fakeSend));
+
+notify.reset();
+notify.check([nrow('c', 'running')], false, fakeSend);
+is('disabled notifications send nothing', 0,
+  notify.check([nrow('c', 'asking')], false, fakeSend));
+
+notify.reset();
+notify.check([nrow('d', 'running')], true, fakeSend);
+is('interrupted also counts as wanting you', 1,
+  notify.check([nrow('d', 'interrupted')], true, fakeSend));
+
+is('the message names the session', true,
+  outbox.length > 0 && outbox[outbox.length - 1].message.includes('T d'));
+
+// ---------------------------------------------------------------- ccboard
+console.log('\nccboard (optional source)');
+is('info() never throws and reports a path', true, typeof ccboard.info().path === 'string');
+is('an unknown session has no curated name', '', ccboard.name('no-such-session-id'));
+is('an unknown session has no usage', null, ccboard.usage('no-such-session-id'));
 
 // ---------------------------------------------------------------- themes
 console.log('\nthemes');
