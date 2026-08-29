@@ -1,6 +1,6 @@
 <div align="center">
 
-# claudeMonitor
+# cmon
 
 **A read-only wall display for every Claude Code session you have open.**
 
@@ -12,6 +12,7 @@ transcript · what each one is costing you · and which project it is really abo
 [![Platform](https://img.shields.io/badge/platform-Windows-0078d4)](lib/platform/win32.js)
 [![Tests](https://img.shields.io/badge/tests-87%20passing-2ea043)](test/run.js)
 [![Themes](https://img.shields.io/badge/themes-17-d7875f)](lib/themes.js)
+[![License](https://img.shields.io/badge/license-see%20notes-lightgrey)](#licensing)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/monitor-dark.svg">
@@ -22,6 +23,21 @@ transcript · what each one is costing you · and which project it is really abo
 <sub>Fabricated sessions — screenshots are generated from <code>--demo</code>, never from a real machine.</sub>
 
 </div>
+
+---
+
+## Why I built this
+
+I run a lot of Claude Code sessions at once — several projects, several chats per
+project, some waiting on me, some grinding through a long tool call. Switching
+between them was the actual bottleneck: I could not tell, without clicking into
+each tab, which one had finished, which one was stuck waiting for an answer, and
+which one had quietly filled its context window. The IDE gives you a list of
+tabs; it does not give you a state.
+
+So I built the thing I wanted on a second monitor: one line per session, sorted
+by who needs me first, with enough context on each line that I never have to open
+a chat to find out what it is doing.
 
 ---
 
@@ -44,8 +60,8 @@ grouping.
 ## Install
 
 ```powershell
-git clone https://github.com/ekrtp/claudeMonitor.git
-cd claudeMonitor
+git clone https://github.com/ekrtp/cmon.git
+cd cmon
 node monitor.js
 ```
 
@@ -288,6 +304,37 @@ live sessions: **91 ms cold, 6–9 ms warm**, against a 2 s refresh.
   cost/context/focus columns, wrapping, a subtle spinner, flicker-free redraw,
   and a fixture test suite.
 
+## Credit, and how much of this is new
+
+This began as a fork of
+[ibrahimokdadov/claudeMonitor](https://github.com/ibrahimokdadov/claudeMonitor),
+whose idea — a small terminal board for Claude Code sessions — is the reason this
+exists. It has since diverged a long way:
+
+| | |
+|---|---|
+| Files changed vs upstream | 35 (**+4,533 / −244** lines) |
+| `monitor.js` | 173 → 689 lines |
+| Files that are new here | 29 of 36 |
+| Unchanged from upstream | `notify.ps1` (26 lines), plus [`legacy/`](legacy/) |
+
+Rows keyed by session instead of by directory, statuses read from the transcript,
+titles from the dashboard database, cost, context, focus tagging, seventeen
+themes, wrapping, zebra rows and a test suite are all new. The
+[CHANGELOG](CHANGELOG.md) has the version-by-version story.
+
+## Licensing
+
+Upstream ships **no LICENSE file**, which means no licence is granted for the
+original code — all rights reserved. This repository therefore stays a **GitHub
+fork**, which is what GitHub's Terms of Service (D.5) permit for public
+repositories; it is deliberately not detached into a standalone project.
+
+Practically: use it, read it, learn from it. If you want to build on it, ask
+[the original author](https://github.com/ibrahimokdadov/claudeMonitor) about
+licensing first — and I would be glad to relicense my own additions under MIT the
+day upstream picks a licence.
+
 ## Notes
 
 - Windows-first by design; platform code is confined to `lib/platform/win32.js`.
@@ -302,4 +349,4 @@ live sessions: **91 ms cold, 6–9 ms warm**, against a 2 s refresh.
   [`legacy/`](legacy/) keeps upstream's demo GIF and its generator: superseded
   here, but kept for provenance.
 
-<div align="center"><sub>Fork of <a href="https://github.com/ibrahimokdadov/claudeMonitor">ibrahimokdadov/claudeMonitor</a></sub></div>
+<div align="center"><sub><code>cmon</code> · forked from <a href="https://github.com/ibrahimokdadov/claudeMonitor">ibrahimokdadov/claudeMonitor</a>, then rebuilt</sub></div>

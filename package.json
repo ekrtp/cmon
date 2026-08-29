@@ -1,10 +1,10 @@
 {
-  "name": "claude-monitor",
-  "version": "0.8.0",
-  "description": "Claude Code session monitor — one row per session, real titles, transcript-derived status (fork of ibrahimokdadov/claudeMonitor)",
+  "name": "cmon",
+  "version": "1.0.0",
+  "description": "cmon — a read-only wall display for every Claude Code session you have open: real titles, transcript-derived status, cost, context and project focus",
   "main": "monitor.js",
   "bin": {
-    "claude-monitor": "monitor.js"
+    "cmon": "monitor.js"
   },
   "scripts": {
     "start": "node monitor.js",
@@ -27,5 +27,15 @@
   "os": [
     "win32"
   ],
-  "private": true
+  "private": true,
+  "keywords": [
+    "claude",
+    "claude-code",
+    "monitor",
+    "tui",
+    "terminal",
+    "dashboard",
+    "sessions",
+    "windows"
+  ]
 }

@@ -1,8 +1,16 @@
-# Changelog
+# Changelog — cmon
 
 This fork's history, newest first. Upstream
 ([ibrahimokdadov/claudeMonitor](https://github.com/ibrahimokdadov/claudeMonitor))
 is the two commits at the bottom.
+
+## 1.0.0 — published
+
+- Renamed to **cmon**, which is what the command has been all along.
+- README says why this exists, credits upstream, and quantifies what changed
+  since the fork point (+4,533 / −244 lines; 29 of 36 files are new).
+- Licensing spelled out: upstream ships no LICENSE, so this stays a GitHub fork
+  rather than a detached project.
 
 ## 0.8.0
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Claude Code session monitor — fork (ekrtp), upstream: ibrahimokdadov/claudeMonitor
+// cmon — a read-only board for your Claude Code sessions.
+// Fork of ibrahimokdadov/claudeMonitor, rebuilt; see README.md.
 //
 // A read-only wall display: one row per session, the title you gave it, a status
 // derived from the transcript, and what each session is costing you. It watches;
