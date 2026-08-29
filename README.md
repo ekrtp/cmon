@@ -1,35 +1,44 @@
-# claudeMonitor (fork)
+<div align="center">
 
-A read-only wall display for your Claude Code sessions on Windows: **one row per
-session**, the **title you actually gave it**, a status read from the session
-transcript, what each session is costing you, and which project it is really
-about.
+# claudeMonitor
 
-It watches; it never drives. No keyboard, no navigation, no hooks, and nothing
-written into Claude Code's own directories.
+**A read-only wall display for every Claude Code session you have open.**
 
-Fork of [ibrahimokdadov/claudeMonitor](https://github.com/ibrahimokdadov/claudeMonitor).
-No dependencies — Node built-ins only.
+One row per session · the title you actually gave it · a status read from the
+transcript · what each one is costing you · and which project it is really about.
 
-```
-  Claude Monitor  10:22:31 · 4 sessions · theme cswap
-  ──────────────────────────────────────────────────────────────────────────────────────────────────────
+[![Node](https://img.shields.io/badge/node-%E2%89%A518-3c873a)](https://nodejs.org)
+[![Dependencies](https://img.shields.io/badge/dependencies-none-2ea043)](package.json)
+[![Platform](https://img.shields.io/badge/platform-Windows-0078d4)](lib/platform/win32.js)
+[![Tests](https://img.shields.io/badge/tests-81%20passing-2ea043)](test/run.js)
+[![Themes](https://img.shields.io/badge/themes-17-d7875f)](lib/themes.js)
 
-    STATUS         TITLE                          MODEL     EFFORT  CTX        COST     TASKS  FOCUS
-  ──────────────────────────────────────────────────────────────────────────────────────────────────────
-  waiting for you · 1
-    !! asking      Rename the billing columns     opus-5    high    48k 24%    $0.08    2/3    billing-api
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/monitor-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/monitor-light.svg">
+  <img alt="claudeMonitor showing six sessions grouped by status" src="assets/monitor-dark.svg" width="100%">
+</picture>
 
-  running a tool · 1
-    /> running     Session monitor: theme picker  opus-5    high    353k 35%   $1.42    3/7    claudeMonitor
+<sub>Fabricated sessions — screenshots are generated from <code>--demo</code>, never from a real machine.</sub>
 
-  finished · 2
-    OK done        Cache warmup investigation     opus-5    high    872k 87%   $24.74   —      search-service
-    OK done        Docs site nav restructure      opus-5    high    211k 21%   $3.10    —      docs-site
-  ──────────────────────────────────────────────────────────────────────────────────────────────────────
-  titles ai-title:3 · user:1 · hidden 1 empty
-  watching · 2s refresh · grouped by status · Ctrl+C to exit
-```
+</div>
+
+---
+
+## What it tells you that a list of tabs cannot
+
+| | |
+|---|---|
+| 🔔 **Who is waiting on you** | `asking` and `interrupted` sort to the top and pulse. Everything else is noise until you have dealt with them. |
+| 🎨 **How full each context is** | `353k 35%` on a green→amber→red ramp. The red one is the chat to compact next. |
+| 💸 **What it has cost** | Per session, from the token counters and the current price list. |
+| 🏷 **Which project it is about** | Every VS Code chat shares one `cwd`; the `focus` tag is worked out from the conversation instead. Same project = same colour and glyph, always. |
+| 🧭 **What it is doing right now** | The tool it is running, plan progress (`3/7`), the task in flight, anything you left queued. |
+
+It watches; it never drives. No hooks, nothing written into Claude Code's own
+directories, `settings.json` untouched. The only key it listens for is `t`.
+
+---
 
 ## Install
 
@@ -39,7 +48,7 @@ cd claudeMonitor
 node monitor.js
 ```
 
-Put it on your PATH so it runs from anywhere:
+Then put it on your PATH so it runs from anywhere:
 
 ```powershell
 node scripts/install-command.js     # installs `cmon` into ~/.local/bin
@@ -47,90 +56,71 @@ cmon                                # from any directory
 cmon --theme=nord --group=focus     # flags pass straight through
 ```
 
-The shim just calls `node <repo>/monitor.js`, so `git pull` updates the command
-with no reinstall. `node scripts/install-command.js --uninstall` removes it
-(moves the shim aside rather than deleting it).
+The shim calls `node <repo>/monitor.js`, so `git pull` updates the command with
+no reinstall; `--uninstall` removes it (moves the shim aside rather than deleting
+it). Node 18+; Node 22.5+ additionally unlocks the cost and curated-name columns
+through `node:sqlite`.
 
-## Usage
+---
 
-| Command | What it does |
-|---|---|
-| `node monitor.js` | live table |
-| `node monitor.js --once` | render once and exit (scripts, CI) |
-| `node monitor.js --all` | include empty chat tabs and stale sessions |
-| `node monitor.js --since=30m` | only sessions active in the last 30 minutes |
-| `node monitor.js --theme=nord` | override the configured theme |
-| `node monitor.js --group=focus` | group by `status` (default), `focus`, `project` or `none` |
-| `node monitor.js --compact` | tighter rows |
-| `node monitor.js --no-animation` | hold the status glyphs still |
-| `node monitor.js --glyphs=emoji` | emoji glyphs and a braille spinner |
-| `node monitor.js --columns=status,title,cost,time` | pick your columns |
-| `node monitor.js --wide` | full session id |
-| `node monitor.js --themes` | preview every theme in colour and exit |
-| `npm test` | 81 fixture assertions, no network, no deps |
-| `npm run config` | show or edit the config |
-| `npm run probe` / `npm run fields` | re-measure the data sources (redacted; `--raw` to keep detail) |
+## Themes
 
-`NO_COLOR=1` disables colour; colour also switches off when stdout is not a TTY.
+Seventeen built in. `cswap` and `cswap-light` are adapted from
+[claude-swap](https://pypi.org/project/claude-swap/)'s own TUI theme — its
+terracotta accent `#d7875f` and the desaturated severity ramp it uses for usage
+bars.
 
-### The one key: `t`
+<div align="center">
+  <img alt="All seventeen themes with their status colours and context ramp" src="assets/themes.svg" width="100%">
+</div>
 
-Press `t` and a theme bar opens along the bottom. Arrow keys (or `h`/`l`) walk
-through the themes and **the whole board recolours as you move**, so you are
-choosing by eye, not by name. `enter` keeps the choice and writes it to your
-config; `esc` puts back what you had. That is the entire keyboard: there is no
-row navigation, because this is a display, not a console. `--no-input` turns even
-that off.
+**Four ways to change it:**
 
+```powershell
+# 1. press t while it is running: a bar opens, arrows preview live, enter keeps it
+node monitor.js --themes                    # 2. the gallery above, in your terminal
+node monitor.js --theme=cswap               # 3. just this run
+node scripts/config.js set theme cswap      # 4. permanent; a running monitor picks it up
 ```
-  theme ‹ dracula catppuccin one-dark [rose-pine] ayu monokai ›   ←→ pick · enter keep · esc cancel
+
+Bring your own as `~/.claude/monitor/themes/<name>.json`:
+
+```json
+{
+  "running": "#7aa2f7", "thinking": "#bb9af7", "done": "#9ece6a",
+  "asking": "#e0af68", "interrupted": "#f7768e", "idle": "#565f89",
+  "header": "#c0caf5", "dim": "#565f89", "accent": "#e0af68",
+  "border": "#3b4261", "bg": "#1a1b26"
+}
 ```
+
+Missing keys fall back to `dark`, so a partial theme still renders; an unknown
+name falls back to `dark` and says so in the header. `NO_COLOR=1` or the `mono`
+theme turns colour off entirely — the glyphs still carry every distinction.
+
+---
 
 ## Statuses
 
-| Status | Colour | Derived from |
-|---|---|---|
-| `asking` | yellow, slow pulse | an `AskUserQuestion` call, or a permission denial that is still the newest event |
-| `interrupted` | red | `[Request interrupted by user]` in the transcript |
-| `running` | signature colour, spinner | `stop_reason: "tool_use"` — a tool is executing; ACTION names it |
-| `thinking` | second accent, spinner | the newest line is a user turn or a tool result |
-| `done` | green | `stop_reason: "end_turn"` — the turn finished |
-| `idle` | grey | nothing recent, or a "running" tool older than `idleAfterMs` |
+| | Status | Colour | Read from |
+|---|---|---|---|
+| `!!` | **asking** | amber, pulsing | an `AskUserQuestion` call, or a permission denial that is still the newest event |
+| `⏸` | **interrupted** | red | `[Request interrupted by user]` |
+| `/>` | **running** | signature colour, spinner | `stop_reason: "tool_use"` — ACTION names the tool |
+| `/.` | **thinking** | second accent, spinner | the newest line is a user turn or a tool result |
+| `OK` | **done** | green | `stop_reason: "end_turn"` |
+| `--` | **idle** | grey | nothing recent, or a "running" tool older than `idleAfterMs` |
 
-Rows sort by how much they want from you, and by default they are **grouped by
-status** with a heading per bucket (`waiting for you`, `running a tool`,
-`finished`, …). Sub-agent turns (`isSidechain`) never decide the session's own
-status.
+Rows are grouped by status by default, most demanding first. Sub-agent turns
+(`isSidechain`) never decide a session's own status. Only the two live states
+animate, and the animation repaints the last snapshot rather than re-reading
+anything from disk.
 
-Only the two live states animate, at `animationMs` (220 ms by default), and the
-animation never touches the disk — it repaints the last snapshot while data is
-re-read on the slower `refreshMs` clock.
-
-## Which project is a session about?
-
-Every VS Code chat in one workspace reports the same `cwd`, so grouping by
-directory puts everything in one bucket. The `focus` column answers the real
-question:
-
-1. Walk up from the session's `cwd` to the nearest `CLAUDE.md` — that is the
-   workspace root. Its folder links are the project list, unioned with the
-   root's actual sub-directories (a router file is allowed to lag).
-2. Score those names against the transcript. A **path** mention
-   (`billing-api/src`, `docs-site\content`) counts three times a bare mention in
-   prose, each line contributes at most four hits, and the tail of
-   the conversation counts double — what a session is doing now outranks how it
-   opened.
-3. Show the winner only if it clears a floor and beats the runner-up by 1.5×.
-   Otherwise the cell stays `—`, or shows the name with a `?` when the margin is
-   thin.
-
-Recomputed every 30 seconds per session, and only when the transcript changed.
-Measured over three live sessions, winner vs runner-up: 241 vs 28, 250 vs 78,
-494 vs 18 — the margin is usually wide enough that the answer is not a guess.
+---
 
 ## Where the title comes from
 
-1. **A name you gave the session** — from the ccboard dashboard database
+1. **A name you gave the session** — the ccboard dashboard database
    (`~/.claude/agent-dashboard/dashboard.db`, `sessions.name`). Renaming a
    session never reaches Claude Code's own files, which is why tools that read
    only `~/.claude/sessions` keep showing a stale title.
@@ -140,54 +130,82 @@ Measured over three live sessions, winner vs runner-up: 241 vs 28, 250 vs 78,
 4. **`firstPrompt`** recorded by the optional hook.
 5. **Project name + short session id.**
 
-The footer says which source each row used. Two sessions that resolve to the
-same title get their short id appended rather than looking like duplicates.
+The footer names the source every visible row used. Two sessions that resolve to
+the same title get their short id appended instead of looking like duplicates.
+
+## Which project is a session about?
+
+Every VS Code chat in a workspace reports the same `cwd`, so the directory tells
+you nothing. The `focus` tag is worked out instead:
+
+1. Walk up from `cwd` to the nearest `CLAUDE.md` — that is the workspace root.
+   Its folder links are the project list, unioned with the root's real
+   sub-directories (a router file is allowed to lag).
+2. Score those names against the transcript. A **path** mention
+   (`billing-api/src`) counts three times a bare mention in prose, one line
+   contributes at most four hits, and the tail counts double — what a session is
+   doing now outranks how it opened.
+3. Show the winner only if it clears a floor and beats the runner-up by 1.5×;
+   otherwise the cell stays `—`, or carries a `?` when the margin is thin.
+
+Each name also gets a colour and a glyph derived from the name itself (FNV-1a),
+so the same project looks identical in every row and every run — and the glyph
+keeps the distinction when colour is off.
+
+---
 
 ## Columns
 
-`status`, `title`, `project`, `focus`, `action`, `model`, `branch`, `src`,
-`session`, `time`, `ctx`, `cost`, `tokens`, `tasks`, `agents`, `effort`, `mode`.
+`status` `title` `project` `focus` `action` `model` `branch` `src` `session`
+`time` `ctx` `cost` `tokens` `tasks` `agents` `effort` `mode`
 
 | Column | Meaning | Source |
 |---|---|---|
-| `ctx` | context occupancy, e.g. `353k 35%`, coloured on a green→amber→red ramp | newest `usage`: input + cache read + cache creation |
-| `cost` | money spent by this session | `token_usage` × `model_pricing` in dashboard.db |
+| `ctx` | context occupancy, coloured by how full it is | newest `usage`: input + cache read + cache creation |
+| `cost` | money spent by this session | `token_usage` × `model_pricing` |
 | `tokens` | all tokens including cache reads | dashboard.db |
-| `tasks` | plan progress, e.g. `3/7`, plus the task in flight after `▸` | `~/.claude/tasks/<session>/*.json` |
-| `agents` | running / total sub-agents | dashboard.db `agents` |
-| `focus` | which project the conversation is about | CLAUDE.md + transcript scoring |
-| `effort` / `mode` | reasoning effort · permission mode | transcript |
+| `tasks` | plan progress `3/7`, plus the task in flight after `▸` | `~/.claude/tasks/<session>/*.json` |
+| `agents` | running / total sub-agents | dashboard.db |
+| `effort`, `mode` | reasoning effort · permission mode | transcript |
 
-The `ctx` cell is the one you act on — it decides which chat to compact — so it
-carries its own colour: a continuous ramp built from the active theme's own
-green, amber and red. Below 35% it stays dim (nothing to think about), then
-warms steadily as the window fills. Every theme gets a ramp that belongs to it.
+`title` and `focus` **wrap onto a second line** instead of being cut off
+(`titleLines`, default 2), breaking on spaces, hyphens and underscores. On a
+narrow terminal columns drop in a fixed order — `model`, `effort`, `ctx` and
+`cost` survive longest — and the footer names what went.
 
-A title longer than its column **wraps onto a second line** rather than being
-cut off (`titleLines`, default 2; set it to 1 for the old clipping behaviour, up
-to 4 for very long names). The other columns stay on the first line, so the
-table still scans vertically.
+---
 
-On a narrow terminal, columns drop in a fixed order rather than squeezing the
-title; the footer names the ones that went.
+## Usage
 
-## Configuration
+| Command | |
+|---|---|
+| `cmon` / `node monitor.js` | live table |
+| `--once` | render once and exit |
+| `--all` | include empty chat tabs and stale sessions |
+| `--since=30m` | only sessions active in the last 30 minutes |
+| `--group=focus` | group by `status` (default), `focus`, `project`, `none` |
+| `--theme=nord` · `--themes` | pick a theme · preview them all |
+| `--columns=status,title,cost,time` | choose your columns |
+| `--compact` · `--no-animation` · `--wide` | tighter rows · still glyphs · full session id |
+| `--demo` | fabricated sessions (screenshots, testing) |
+| `npm test` | 81 fixture assertions, no network, no deps |
+| `npm run config` | show or edit the config |
+| `npm run probe` | re-measure every file format this depends on |
 
-`~/.claude/monitor/config.json`, created on first run and **hot-reloaded** —
-edit it while the monitor runs and the next frame picks it up.
+### Configuration
+
+`~/.claude/monitor/config.json`, created on first run and **hot-reloaded** — edit
+it while the monitor runs and the next frame picks it up.
 
 ```powershell
-node scripts/config.js                      # show current config
-node scripts/config.js set theme cswap
+node scripts/config.js                      # show
 node scripts/config.js set groupBy focus
-node scripts/config.js set density compact
-node scripts/config.js set titleLines 1     # stop wrapping long titles
-node scripts/config.js set animationMs 0    # hold the glyphs still
+node scripts/config.js set notifications true
 node scripts/config.js columns +agents -tasks
-node scripts/config.js defaults             # rewrite with defaults
+node scripts/config.js defaults
 ```
 
-Every change writes a timestamped backup next to the file first.
+Every change writes a timestamped backup first.
 
 ```json
 {
@@ -208,54 +226,16 @@ Every change writes a timestamped backup next to the file first.
 }
 ```
 
-### Themes
-
-**Changing the theme — four ways:**
-
-```powershell
-# 1. press t while it is running, arrow through them, enter to keep
-node monitor.js --themes                    # 2. see them all, in colour, side by side
-node monitor.js --theme=cswap               # 3. just this run
-node scripts/config.js set theme cswap      # 4. permanent; a running monitor picks it up
-```
-
-The third writes `theme` into `~/.claude/monitor/config.json`; the file is
-watched, so an open monitor re-colours on the next frame without a restart. You
-can also edit that file by hand.
-
-Sixteen built in: `dark`, `light`, `cswap`, `cswap-light`, `solarized`,
-`solarized-light`, `nord`, `gruvbox`, `dracula`, `catppuccin`,
-`catppuccin-latte`, `one-dark`, `rose-pine`, `ayu`, `monokai`, `github-light`,
-and `mono` (no colour).
-
-`cswap` and `cswap-light` are adapted from
-[claude-swap](https://pypi.org/project/claude-swap/)'s own TUI theme
-(`claude_swap/tui/theme.py`): its terracotta accent `#d7875f` (xterm 173) and
-the desaturated severity ramp it uses for usage bars.
-
-Add your own as `~/.claude/monitor/themes/<name>.json`:
-
-```json
-{
-  "running": "#7aa2f7", "thinking": "#bb9af7", "done": "#9ece6a",
-  "asking": "#e0af68", "interrupted": "#f7768e", "idle": "#565f89",
-  "header": "#c0caf5", "dim": "#565f89", "accent": "#e0af68", "border": "#3b4261"
-}
-```
-
-Missing keys fall back to `dark`, so a partial theme still renders. An unknown
-theme name falls back to `dark` and says so in the header.
-
 ### Notifications
 
 `"notifications": true` shows a Windows balloon tip when a session moves into
-`asking` or `interrupted`. It fires on the transition only, never on the first
-frame, and at most once a minute per session.
+`asking` or `interrupted` — on the transition only, never on the first frame, and
+at most once a minute per session.
 
-## Hooks (optional)
+### Hooks (optional)
 
-The monitor does not need hooks. Installing them only adds the prompt at submit
-time and Notification events:
+Not required. Installing them only adds the prompt at submit time and
+Notification events:
 
 ```powershell
 node scripts/install-hooks.js --dry-run   # show what would change
@@ -263,51 +243,51 @@ node scripts/install-hooks.js             # back up, merge, write
 node scripts/uninstall-hooks.js           # remove only ours
 ```
 
-The installer **merges**: other tools' hooks are preserved (measured on the
-author's machine: 18 hook commands belonging to a different app), it is
-idempotent, and it backs up `settings.json` first. If you switch accounts with a
-tool that swaps `~/.claude`, run it again.
+The installer **merges** — other tools' hooks are preserved, it is idempotent,
+and it backs up `settings.json` first.
+
+---
 
 ## What it reads
 
-| Path | Use | Mode |
+| Path | For | Mode |
 |---|---|---|
-| `~/.claude/sessions/<PID>.json` | which sessions exist (pid, id, cwd, entrypoint) | read only |
+| `~/.claude/sessions/<PID>.json` | which sessions exist | read only |
 | `~/.claude/projects/<enc>/<id>.jsonl` | title, status, model, context, focus, queue | read only, windowed |
 | `~/.claude/agent-dashboard/dashboard.db` | curated names, cost, sub-agents | read only, optional |
 | `~/.claude/tasks/<session>/*.json` | plan progress | read only |
 | `<workspace>/CLAUDE.md` | the project list for `focus` | read only |
 | `~/.claude/monitor/config.json` | configuration | read + created once |
-| `~/.claude/monitor/state/<id>.json` | optional hook state | written by the hook |
 
 Transcripts are never loaded whole: 128 KB from the head for the title, 64 KB
-from the tail for the status, 32 KB + 192 KB for the focus scan, all cached per
+from the tail for the status, 32 KB + 192 KB for the focus scan — all cached per
 file mtime, and a resolved `ai-title` is cached permanently. Measured over 33
-live sessions: 91 ms cold, 6–9 ms warm.
+live sessions: **91 ms cold, 6–9 ms warm**, against a 2 s refresh.
 
 ## Differences from upstream
 
 - Rows are keyed by **session**, not by project directory. Upstream wrote
-  `~/.claude/sessions/<project>.json`, so every chat in a workspace overwrote the
-  same file — one row for N chats, and one session duplicated across every
-  directory it had `cd`'d into.
-- Nothing is written into `~/.claude/sessions/`, which is Claude Code's own
-  registry.
+  `~/.claude/sessions/<project>.json`, so every chat in one workspace overwrote
+  the same file — one row for N chats, and a single session duplicated across
+  every directory it had `cd`'d into.
+- Nothing is written into `~/.claude/sessions/`: that is Claude Code's registry.
 - Titles, statuses and metadata come from the transcript and the dashboard
-  database. `decodeDirName()` is gone (it turned `e-commerce` into
-  `e\commerce`); the real `cwd` is encoded instead.
-- No `powershell.exe` spawn every 2 seconds: liveness is `process.kill(pid, 0)`.
-- Sixteen themes with hot reload, status grouping, cost/context/focus columns,
-  a subtle spinner, flicker-free redraw, and a fixture test suite.
-
-`npm run probe` re-measures every file format this code depends on and prints a
-report (`docs/DATA-SOURCES.md`, untracked — it describes YOUR sessions). Claude
-Code can change these formats; the probe is how you find out.
+  database. `decodeDirName()` is gone — it turned `e-commerce` into
+  `e\commerce` — and the real `cwd` is encoded instead.
+- No `powershell.exe` spawn every two seconds: liveness is `process.kill(pid, 0)`.
+- Seventeen themes with hot reload and a live picker, status grouping,
+  cost/context/focus columns, wrapping, a subtle spinner, flicker-free redraw,
+  and a fixture test suite.
 
 ## Notes
 
 - Windows-first by design; platform code is confined to `lib/platform/win32.js`.
-- The dashboard database is read with `node:sqlite` (Node 22.5+). Without it,
-  names, cost and sub-agent counts simply go quiet.
+- The dashboard database is read with `node:sqlite`. Without it, names, cost and
+  sub-agent counts simply go quiet.
+- `npm run probe` re-measures the file formats this code depends on and writes
+  `docs/DATA-SOURCES.md` (untracked, redacted by default — it describes *your*
+  sessions).
 - Upstream has no LICENSE file. This is a personal fork; ask the original author
   about licensing before publishing anything built on it.
+
+<div align="center"><sub>Fork of <a href="https://github.com/ibrahimokdadov/claudeMonitor">ibrahimokdadov/claudeMonitor</a></sub></div>

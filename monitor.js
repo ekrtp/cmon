@@ -25,7 +25,8 @@
 //   node monitor.js --compact           tighter rows
 //   node monitor.js --no-animation      hold the status glyphs still
 //   node monitor.js --wide              full session id
-//   node monitor.js --themes            list themes and exit
+//   node monitor.js --themes            preview every theme and exit
+//   node monitor.js --demo              fabricated sessions (screenshots, testing)
 // Environment: NO_COLOR=1 disables colour.
 //
 // Config: ~/.claude/monitor/config.json — hot-reloaded, no restart needed.
@@ -41,6 +42,8 @@ const ccboard = require('./lib/ccboard');
 const tasksLib = require('./lib/tasks');
 const projects = require('./lib/projects');
 const notify = require('./lib/notify');
+const identity = require('./lib/identity');
+const demo = require('./lib/demo');
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes('--' + name);
@@ -51,6 +54,9 @@ const value = (name) => {
 
 const ONCE = flag('once');
 const ALL = flag('all');
+// --demo renders fabricated sessions. The README screenshots come from here,
+// never from a live machine.
+const DEMO = flag('demo');
 
 // --themes prints a coloured sample of every theme, so you can pick one by
 // looking instead of by name.
@@ -73,7 +79,8 @@ if (flag('themes')) {
   console.log('');
   console.log('  Use one:   node monitor.js --theme=<name>        (just this run)');
   console.log('             node scripts/config.js set theme <name>   (permanent, applies live)');
-  console.log('  Your own:  ' + themes.USER_THEME_DIR + '\\<name>.json');
+  // Relative to home: an absolute path puts a username into anyone's screenshot.
+  console.log('  Your own:  ' + themes.USER_THEME_DIR.replace(require('os').homedir(), '~') + '\\<name>.json');
   console.log('  Keys:      ' + themes.REQUIRED_KEYS.join(', '));
   process.exit(0);
 }
@@ -102,6 +109,11 @@ function applyOverrides(base) {
 
 let active = applyOverrides(cfg);
 let theme = themes.resolve(active.theme);
+
+// Generated colours (the focus tags) must sit readably on whatever background
+// the theme implies. `header` is the theme's brightest text colour, so a light
+// theme is one whose header is DARK.
+const themeIsLight = () => identity.luminance(themes.hexToRgb(theme.colours.header)) < 0.5;
 
 const COLOUR_ON = !process.env.NO_COLOR && (process.stdout.isTTY || ONCE);
 const RESET = COLOUR_ON ? '\x1b[0m' : '';
@@ -211,6 +223,7 @@ const shortModel = (m) => String(m || '').replace(/^claude-/, '').replace(/-\d{8
 
 // --- data ------------------------------------------------------------------
 function collect() {
+  if (DEMO) return demo.snapshot();
   const sessions = registry.liveSessions();
   const hookState = state.bySession();
 
@@ -331,6 +344,15 @@ function contextRatio(row) {
 // The context cell is the one number you act on (compact this chat, or don't),
 // so it gets its own colour: a continuous green -> amber -> red ramp built from
 // the active theme rather than a fixed palette.
+// Same project, same colour, every row and every run — derived from the name,
+// never assigned in order of appearance.
+function focusPaint(row) {
+  if (!COLOUR_ON || !row.focus) return '';
+  if (!themes.hexToRgb(theme.colours.running)) return '';   // mono: no colour at all
+  const c = identity.colourFor(row.focus.name, { light: themeIsLight() });
+  return `[38;2;${c[0]};${c[1]};${c[2]}m`;
+}
+
 function contextPaint(row) {
   if (!COLOUR_ON) return '';
   const c = themes.ramp(theme.colours, contextRatio(row));
@@ -342,7 +364,11 @@ function cell(row, col) {
     case 'status': return `${glyph(row.status)} ${row.status}`;
     case 'title': return row.title;
     case 'project': return row.project;
-    case 'focus': return row.focus ? row.focus.name + (row.focus.confident ? '' : ' ?') : '—';
+    case 'focus': {
+      if (!row.focus) return '—';
+      const mark = identity.glyphFor(row.focus.name, active.glyphs);
+      return `${mark} ${row.focus.name}${row.focus.confident ? '' : ' ?'}`;
+    }
     case 'action': return row.action || '—';
     case 'model': return row.model || '—';
     case 'branch': return row.branch || '—';
@@ -406,7 +432,8 @@ function render(snapshot) {
   const rule = paint('border') + '─'.repeat(total - 4) + RESET;
 
   const out = [];
-  const clock = new Date().toLocaleTimeString();
+  // A frozen clock in demo mode keeps regenerated screenshots byte-identical.
+  const clock = DEMO ? '09:41:07' : new Date().toLocaleTimeString();
   out.push(`  ${BOLD}${paint('accent')}Claude Monitor${RESET}  ${paint('dim')}${clock} · ` +
     `${rows.length} session${rows.length === 1 ? '' : 's'} · theme ${theme.name}` +
     `${theme.fallbackFrom ? ` (unknown "${theme.fallbackFrom}", using dark)` : ''}` +
@@ -428,18 +455,30 @@ function render(snapshot) {
   // A row can occupy more than one line: a long title wraps into the TITLE
   // column instead of being cut off, up to titleLines. Every other column stays
   // on the first line, so the table still scans vertically.
+  // Columns whose value is a name rather than a measurement: too long to cut,
+  // so they wrap down instead. Everything else stays on the first line.
+  const WRAPPABLE = ['title', 'focus'];
+
   const lines = (row, lead) => {
     const colour = paint(row.status) || paint('idle');
     const needsYou = row.status === 'asking' || row.status === 'interrupted';
-    const chunks = wrap(row.title, w.title, active.titleLines);
 
-    const cellText = (c, i) => (c === 'title' ? (chunks[i] || '') : (i === 0 ? cell(row, c) : ''));
-    const render1 = (i) => cols.map((c) => {
+    const chunks = {};
+    let height = 1;
+    for (const c of cols) {
+      if (!WRAPPABLE.includes(c)) continue;
+      chunks[c] = wrap(cell(row, c), w[c], active.titleLines);
+      height = Math.max(height, chunks[c].length);
+    }
+
+    const cellText = (c, i) => (chunks[c] ? (chunks[c][i] || '') : (i === 0 ? cell(row, c) : ''));
+    const renderLine = (i) => cols.map((c) => {
       const text = pad(cellText(c, i), w[c]);
-      if (i > 0 && c !== 'title') return text;                       // continuation: blank
+      if (i > 0 && !chunks[c]) return text;                          // continuation: blank
       if (c === 'status') return colour + (needsYou ? BOLD : '') + text + RESET;
       if (c === 'title') return (needsYou ? BOLD + colour : '') + text + RESET;
       if (c === 'ctx') return contextPaint(row) + text + RESET;
+      if (c === 'focus') return focusPaint(row) + text + RESET;
       return paint('dim') + text + RESET;
     }).join(sep);
 
@@ -447,8 +486,8 @@ function render(snapshot) {
     if (row.queued) extras.push(`${colour}+${row.queued} queued${RESET}`);
     if (row.plan && row.plan.current) extras.push(`${paint('dim')}▸ ${clip(row.plan.current, 30)}${RESET}`);
 
-    const out = ['  ' + lead + render1(0) + (extras.length ? sep + extras.join(' ') : '')];
-    for (let i = 1; i < chunks.length; i++) out.push('  ' + lead + render1(i));
+    const out = ['  ' + lead + renderLine(0) + (extras.length ? sep + extras.join(' ') : '')];
+    for (let i = 1; i < height; i++) out.push('  ' + lead + renderLine(i));
     return out;
   };
 
