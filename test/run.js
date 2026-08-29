@@ -403,6 +403,15 @@ is('titleLines 1 falls back to clipping', 1,
 is('an emoji is two cells, a letter is one', 3, text.width('🔧x'));
 is('ANSI escapes are invisible', 3, text.width('\x1b[31mabc\x1b[0m'));
 
+// ---------------------------------------------------------------- ctx window
+console.log('\ncontext window');
+const TIERS = [200000, 1000000];
+const limitFor = (t) => TIERS.find((x) => x >= Math.max(t, 200000)) || t;
+
+is('a session under 200k is assumed to be on the small window', 200000, limitFor(42000));
+is('a session past 200k must be on the 1M window', 1000000, limitFor(379000));
+is('the boundary itself stays on the small window', 200000, limitFor(200000));
+
 // ---------------------------------------------------------------- ctx ramp
 console.log('\ncontext colour ramp');
 is('a quiet context stays in the dim colour',

@@ -46,7 +46,7 @@ a chat to find out what it is doing.
 | | |
 |---|---|
 | 🔔 **Who is waiting on you** | `asking` and `interrupted` sort to the top and pulse. Everything else is noise until you have dealt with them. |
-| 🎨 **How full each context is** | `353k 35%` on a green→amber→red ramp. The red one is the chat to compact next. |
+| 🎨 **How full each context is** | `379k/1M`, coloured on a green→amber→red ramp. The red one is the chat to compact next. |
 | 💸 **What it has cost** | Per session, from the token counters and the current price list. |
 | 🏷 **Which project it is about** | Every VS Code chat shares one `cwd`; the `focus` tag is worked out from the conversation instead. Same project = same colour and glyph, always. |
 | 🧭 **What it is doing right now** | The tool it is running, plan progress (`3/7`), the task in flight, anything you left queued. |
@@ -178,7 +178,7 @@ keeps the distinction when colour is off.
 
 | Column | Meaning | Source |
 |---|---|---|
-| `ctx` | context occupancy, coloured by how full it is | newest `usage`: input + cache read + cache creation |
+| `ctx` | context used against the window, e.g. `379k/1M`, coloured by how full it is | newest `usage`: input + cache read + cache creation |
 | `cost` | money spent by this session | `token_usage` × `model_pricing` |
 | `tokens` | all tokens including cache reads | dashboard.db |
 | `tasks` | plan progress `3/7`, plus the task in flight after `▸` | `~/.claude/tasks/<session>/*.json` |

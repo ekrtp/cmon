@@ -11,3 +11,7 @@ docs/probe.err
 # Uretilen olcum raporlari: KENDI oturumlarini anlatir, versiyonlanmaz.
 # Yeniden uretmek icin: npm run probe
 docs/
+
+# Kisisel notlar / bug listesi — depoya ait degil, diskte kalir
+bugreport.txt
+notes.local.*

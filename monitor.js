@@ -343,11 +343,21 @@ function layout(total, requested, indent, gap) {
   return { w, columns };
 }
 
-// A 1M-context session legitimately reports more than the standard window, so
-// the limit follows the data rather than pretending everything is 200k.
+// ⚠️ Nothing records the size of a session's context window: it is not in the
+// transcript's `usage` block, and the dashboard's `context_size` column reads
+// "short" for every row, including a session that reached 872k (both measured).
+// So the limit is an assumption, and the cell SHOWS it — "379k/1M" — instead of
+// hiding it inside a percentage that would read 95% for a 1M session sitting at
+// 190k.
+const TIERS = [200000, 1000000];
 function contextLimit(tokens) {
-  const configured = Number(active.contextLimit) || 200000;
-  return tokens > configured ? 1000000 : configured;
+  const configured = Number(active.contextLimit) || TIERS[0];
+  // Whatever a session has already used, its window is at least that big.
+  return TIERS.find((t) => t >= Math.max(tokens, configured)) || tokens;
+}
+
+function formatLimit(limit) {
+  return limit >= 1e6 ? `${Math.round(limit / 1e5) / 10}M`.replace('.0M', 'M') : `${Math.round(limit / 1e3)}k`;
 }
 
 function contextRatio(row) {
@@ -414,7 +424,7 @@ function cell(row, col) {
     case 'time': return ago(row.lastEvent);
     case 'ctx': {
       if (!row.contextTokens) return '—';
-      return `${compactNumber(row.contextTokens)} ${Math.round(contextRatio(row) * 100)}%`;
+      return `${compactNumber(row.contextTokens)}/${formatLimit(contextLimit(row.contextTokens))}`;
     }
     case 'cost': return row.cost == null ? '—' : '$' + row.cost.toFixed(2);
     case 'tokens': return row.tokens == null ? '—' : compactNumber(row.tokens);
