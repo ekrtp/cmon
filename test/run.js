@@ -6,6 +6,13 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+
+// Point lib/config at a throwaway file BEFORE requiring it. Without this the
+// hot-reload test writes into ~/.claude/monitor/config.json and every monitor
+// you have open changes theme for a couple of seconds.
+const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-monitor-test-'));
+process.env.CLAUDE_MONITOR_CONFIG = path.join(tmpRoot, 'config.json');
+
 const titles = require('../lib/titles');
 const statusLib = require('../lib/status');
 const themes = require('../lib/themes');
@@ -17,7 +24,7 @@ const projects = require('../lib/projects');
 const text = require('../lib/text');
 const { isAlive } = require('../lib/platform/win32');
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-monitor-test-'));
+const tmp = tmpRoot;
 let passed = 0, failed = 0;
 
 function is(name, expected, actual) {
@@ -340,6 +347,32 @@ is('density only accepts compact or comfortable',
   [configLib.sanitise({ density: 'compact' }).density,
     configLib.sanitise({ density: 'wat' }).density]);
 
+is('zebra is on by default and can be turned off', [true, false],
+  [configLib.sanitise({}).zebra, configLib.sanitise({ zebra: false }).zebra]);
+
+is('an out-of-range zebraStrength falls back', configLib.DEFAULTS.zebraStrength,
+  configLib.sanitise({ zebraStrength: 9 }).zebraStrength);
+
+is('zebraStrength 0 is respected (invisible, but still valid)', 0,
+  configLib.sanitise({ zebraStrength: 0 }).zebraStrength);
+
+is('the g key walks status -> focus -> project -> none -> status',
+  ['focus', 'project', 'none', 'status'],
+  (() => {
+    const order = configLib.GROUP_BY;
+    const next = (from) => order[(order.indexOf(from) + 1) % order.length];
+    return [next('status'), next('focus'), next('project'), next('none')];
+  })());
+
+is('the stripe colour sits between the background and the text', true,
+  (() => {
+    const t = themes.BUILT_IN.dark;
+    const bg = themes.hexToRgb(t.bg);
+    const mixed = themes.mix(t.bg, t.header, 0.07);
+    // brighter than the background, nowhere near the text
+    return mixed[0] > bg[0] && mixed[0] < themes.hexToRgb(t.header)[0];
+  })());
+
 is('model, effort and ctx sit next to each other by default',
   ['model', 'effort', 'ctx'],
   configLib.DEFAULTS.columns.slice(
@@ -443,8 +476,8 @@ try {
 // fs.watchFile polls once a second, so this section is asynchronous.
 console.log('\nconfig hot reload');
 const watchTarget = configLib.FILE;
-let original = null;
-try { original = fs.readFileSync(watchTarget, 'utf8'); } catch (e) { /* none yet */ }
+is('the suite never touches the real config', true,
+  watchTarget.startsWith(tmpRoot));
 
 configLib.ensureFile();
 const before = configLib.load().theme;
@@ -458,10 +491,7 @@ fs.writeFileSync(watchTarget, JSON.stringify({ ...configLib.load(), theme: flipp
 setTimeout(() => {
   is(`editing config.json fires the watcher (${before} -> ${flipped})`, flipped, fired);
   stop();
-  // Restore the user's own config exactly as it was.
-  if (original !== null) fs.writeFileSync(watchTarget, original, 'utf8');
-  else fs.writeFileSync(watchTarget, JSON.stringify(configLib.DEFAULTS, null, 2) + '\n', 'utf8');
-
+  // Nothing to restore: the whole run happened inside the temp directory.
   console.log(`\n${passed} passed · ${failed} failed · fixtures in ${tmp}`);
   process.exit(failed ? 1 : 0);
 }, 2600);

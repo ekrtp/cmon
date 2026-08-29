@@ -10,7 +10,7 @@ transcript · what each one is costing you · and which project it is really abo
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-3c873a)](https://nodejs.org)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-2ea043)](package.json)
 [![Platform](https://img.shields.io/badge/platform-Windows-0078d4)](lib/platform/win32.js)
-[![Tests](https://img.shields.io/badge/tests-81%20passing-2ea043)](test/run.js)
+[![Tests](https://img.shields.io/badge/tests-87%20passing-2ea043)](test/run.js)
 [![Themes](https://img.shields.io/badge/themes-17-d7875f)](lib/themes.js)
 
 <picture>
@@ -36,7 +36,8 @@ transcript · what each one is costing you · and which project it is really abo
 | 🧭 **What it is doing right now** | The tool it is running, plan progress (`3/7`), the task in flight, anything you left queued. |
 
 It watches; it never drives. No hooks, nothing written into Claude Code's own
-directories, `settings.json` untouched. The only key it listens for is `t`.
+directories, `settings.json` untouched. Two keys: `t` for themes, `g` for
+grouping.
 
 ---
 
@@ -168,6 +169,9 @@ keeps the distinction when colour is off.
 | `agents` | running / total sub-agents | dashboard.db |
 | `effort`, `mode` | reasoning effort · permission mode | transcript |
 
+Alternate rows carry a faint background band (`zebra`, `zebraStrength`), which is
+what makes a wrapped two-line row read as one session instead of two.
+
 `title` and `focus` **wrap onto a second line** instead of being cut off
 (`titleLines`, default 2), breaking on spaces, hyphens and underscores. On a
 narrow terminal columns drop in a fixed order — `model`, `effort`, `ctx` and
@@ -191,6 +195,7 @@ narrow terminal columns drop in a fixed order — `model`, `effort`, `ctx` and
 | `npm test` | 81 fixture assertions, no network, no deps |
 | `npm run config` | show or edit the config |
 | `npm run probe` | re-measure every file format this depends on |
+| `npm run screenshot` | regenerate the README images from `--demo` |
 
 ### Configuration
 
@@ -205,7 +210,9 @@ node scripts/config.js columns +agents -tasks
 node scripts/config.js defaults
 ```
 
-Every change writes a timestamped backup first.
+Every change writes a timestamped backup first. `CLAUDE_MONITOR_CONFIG` points
+the tool at a different file — the test suite uses it so a test run can never
+touch the config of a board you have open.
 
 ```json
 {
@@ -216,6 +223,8 @@ Every change writes a timestamped backup first.
   "animationMs": 220,
   "density": "comfortable",
   "titleLines": 2,
+  "zebra": true,
+  "zebraStrength": 0.07,
   "groupBy": "status",
   "window": "4h",
   "showEmpty": false,

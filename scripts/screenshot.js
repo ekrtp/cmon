@@ -48,10 +48,11 @@ function parse(line) {
   const spans = [];
   let fill = null;
   let bold = false;
+  let back = null;
   let buffer = '';
 
   const flush = () => {
-    if (buffer) spans.push({ text: buffer, fill, bold });
+    if (buffer) spans.push({ text: buffer, fill, bold, back });
     buffer = '';
   };
 
@@ -64,10 +65,14 @@ function parse(line) {
     flush();
 
     const codes = m[1].split(';').filter((c) => c !== '');
-    if (!codes.length || codes[0] === '0') { fill = null; bold = false; continue; }
+    if (!codes.length || codes[0] === '0') { fill = null; bold = false; back = null; continue; }
     if (codes[0] === '1') { bold = true; continue; }
     if (codes[0] === '38' && codes[1] === '2') {
       fill = `rgb(${codes[2]},${codes[3]},${codes[4]})`;
+    }
+    // Background: the zebra stripe. Recorded per line and drawn as a band.
+    if (codes[0] === '48' && codes[1] === '2') {
+      back = `rgb(${codes[2]},${codes[3]},${codes[4]})`;
     }
   }
   buffer += line.slice(last);
@@ -102,6 +107,14 @@ function toSvg(rawAnsi, themeName) {
   const w = Math.round(columns * CHAR_W + PAD_X * 2);
   const h = Math.round(lines.length * LINE_H + PAD_Y * 2 + 26);
 
+  // Zebra bands first, so the text sits on top of them.
+  const bands = lines.map((line, i) => {
+    const band = parse(line).find((s) => s.back);
+    if (!band) return '';
+    const y = PAD_Y + 26 + i * LINE_H - 14;
+    return `<rect x="0" y="${y}" width="${w}" height="${LINE_H}" fill="${band.back}"/>`;
+  }).filter(Boolean).join('\n  ');
+
   const body = lines.map((line, i) => {
     const y = PAD_Y + 26 + i * LINE_H;
     let x = PAD_X;
@@ -123,6 +136,7 @@ function toSvg(rawAnsi, themeName) {
   <rect width="${w}" height="${h}" rx="10" fill="${background}"/>
   <rect width="${w}" height="37" rx="10" fill="${light ? '#e8e6e1' : '#1a1d24'}"/>
   <rect y="27" width="${w}" height="10" fill="${light ? '#e8e6e1' : '#1a1d24'}"/>
+  ${bands}
   ${dot(22, '#ff5f57')}${dot(42, '#febc2e')}${dot(62, '#28c840')}
   <text x="${w / 2}" y="22" text-anchor="middle" font-size="11" fill="${colours.dim || '#8a8a8a'}">claude monitor — theme ${themeName}</text>
   <text xml:space="preserve" fill="${defaultText}">

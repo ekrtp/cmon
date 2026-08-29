@@ -175,6 +175,19 @@ function movePicker(step) {
   previewTheme(list[picker.index]);
 }
 
+// `g` walks the grouping options and keeps the choice. One setting, one key —
+// no menu, because the whole point of this board is that it does not need one.
+function cycleGrouping() {
+  const order = configLib.GROUP_BY;   // status -> focus -> project -> none
+  const next = order[(order.indexOf(active.groupBy) + 1) % order.length];
+  try {
+    configLib.set('groupBy', next);   // sticky: the next run opens the same way
+    cfg = configLib.load();
+  } catch (e) { /* keep going with the in-memory value */ }
+  // Preserve whatever theme is on screen — the picker may have changed it.
+  active = applyOverrides({ ...cfg, groupBy: next, theme: active.theme });
+}
+
 function closePicker(keep) {
   const list = themes.names();
   if (keep) {
@@ -353,6 +366,29 @@ function focusPaint(row) {
   return `[38;2;${c[0]};${c[1]};${c[2]}m`;
 }
 
+// Zebra striping. A row can occupy two or three lines once the title wraps, and
+// without a band it is genuinely hard to see where one session ends and the next
+// begins. The stripe is drawn from the theme's own background, nudged towards
+// its text colour by `zebraStrength` — subtle enough to read as texture, not as
+// a highlight.
+function stripeCode() {
+  if (!COLOUR_ON || !active.zebra) return '';
+  const bg = themes.hexToRgb(theme.colours.bg);
+  const fg = themes.hexToRgb(theme.colours.header);
+  if (!bg || !fg) return '';                    // mono, or a theme without a bg
+  const c = themes.mix(theme.colours.bg, theme.colours.header, active.zebraStrength);
+  return `\x1b[48;2;${c[0]};${c[1]};${c[2]}m`;
+}
+
+// Every RESET inside the line would also clear the background, so the stripe is
+// re-applied after each one, and the line is padded to the full width so the
+// band runs to the edge.
+function applyStripe(line, code, total) {
+  if (!code) return line;
+  const padded = line + ' '.repeat(Math.max(0, total - width(line)));
+  return code + padded.split(RESET).join(RESET + code) + '\x1b[0m';
+}
+
 function contextPaint(row) {
   if (!COLOUR_ON) return '';
   const c = themes.ramp(theme.colours, contextRatio(row));
@@ -459,7 +495,8 @@ function render(snapshot) {
   // so they wrap down instead. Everything else stays on the first line.
   const WRAPPABLE = ['title', 'focus'];
 
-  const lines = (row, lead) => {
+  const lines = (row, lead, striped) => {
+    const stripe = striped ? stripeCode() : '';
     const colour = paint(row.status) || paint('idle');
     const needsYou = row.status === 'asking' || row.status === 'interrupted';
 
@@ -488,13 +525,20 @@ function render(snapshot) {
 
     const out = ['  ' + lead + renderLine(0) + (extras.length ? sep + extras.join(' ') : '')];
     for (let i = 1; i < height; i++) out.push('  ' + lead + renderLine(i));
-    return out;
+    // The band covers EVERY line of the row, which is what makes a wrapped title
+    // read as one session instead of two.
+    return out.map((l) => applyStripe(l, stripe, total));
   };
+
+  // The stripe alternates across the WHOLE table, not within each group: with
+  // one row per group nothing would ever alternate.
+  let rowIndex = 0;
+  const emit = (r, lead) => out.push(...lines(r, lead, rowIndex++ % 2 === 1));
 
   if (!grouped) {
     out.push(header(''));
     out.push('  ' + rule);
-    for (const r of rows) out.push(...lines(r, ''));
+    for (const r of rows) emit(r, '');
   } else {
     out.push(header('  '));
     out.push('  ' + rule);
@@ -504,7 +548,7 @@ function render(snapshot) {
         : group.key;
       const colour = active.groupBy === 'status' ? (paint(group.key) || paint('header')) : paint('header');
       out.push(`  ${BOLD}${colour}${label}${RESET}${paint('dim')} · ${group.rows.length}${RESET}`);
-      for (const r of group.rows) out.push(...lines(r, '  '));
+      for (const r of group.rows) emit(r, '  ');
       if (roomy) out.push('');
     }
     if (roomy) out.pop();   // no trailing blank before the footer rule
@@ -627,6 +671,7 @@ if (ONCE) {
 
       if (!picker.open) {
         if (key === 't') { openPicker(); paintFrame(snapshot); }
+        else if (key === 'g') { cycleGrouping(); paintFrame(snapshot); }
         else if (key === 'q') quit();
         return;
       }

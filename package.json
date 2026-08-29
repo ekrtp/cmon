@@ -1,6 +1,6 @@
 {
   "name": "claude-monitor",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Claude Code session monitor — one row per session, real titles, transcript-derived status (fork of ibrahimokdadov/claudeMonitor)",
   "main": "monitor.js",
   "bin": {
