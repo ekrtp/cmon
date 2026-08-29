@@ -7,3 +7,7 @@ __pycache__/
 
 # Faz 0 probe stderr yakalamasi — olcum degil, versiyonlanmaz
 docs/probe.err
+
+# Uretilen olcum raporlari: KENDI oturumlarini anlatir, versiyonlanmaz.
+# Yeniden uretmek icin: npm run probe
+docs/

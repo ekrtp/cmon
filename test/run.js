@@ -92,8 +92,8 @@ is('tool_result turns are not titles',
   titles._fromTranscript(fixture('t8.jsonl', [toolResultLine('a'), userLine('the real question')])));
 
 is('cwd encodes to the project directory (measured, case preserved)',
-  'c--Users-dev-user-Documents-VSCode',
-  titles.encodePath('c:\\Users\\dev.user\\Documents\\VSCode'));
+  'c--Users-dev-user-Documents-workspace',
+  titles.encodePath('c:\\Users\\dev.user\\Documents\\workspace'));
 
 is('a real hyphen in a folder name survives encoding',
   'c--tmp-e-commerce-app', titles.encodePath('c:/tmp/e-commerce/app'));
@@ -358,7 +358,7 @@ is('the last allowed line is ellipsized', true,
   text.wrap('one two three four five six seven eight nine ten eleven', 12, 2).pop().endsWith('…'));
 
 is('no line ever exceeds the column width', true,
-  text.wrap('project-b newsvendor kapasite analizi ve rapor', 18, 3)
+  text.wrap('billing-api invoice reconciliation report draft', 18, 3)
     .every((l) => text.width(l) <= 18));
 
 is('a single unbreakable word is split, not dropped', true,

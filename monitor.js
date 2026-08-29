@@ -138,6 +138,72 @@ function glyph(status) {
   return set[status] || '·';
 }
 
+// --- theme picker ----------------------------------------------------------
+// The only interactive thing in the tool. `t` opens a bar along the bottom;
+// arrows move through the themes and recolour the whole board live; enter keeps
+// the choice (written to the config), escape puts back what you had.
+const picker = { open: false, index: 0, previous: null, saved: '' };
+
+function openPicker() {
+  const list = themes.names();
+  picker.open = true;
+  picker.previous = active.theme;
+  picker.index = Math.max(0, list.indexOf(theme.name));
+  picker.saved = '';
+}
+
+function previewTheme(name) {
+  active = applyOverrides({ ...cfg, theme: name });
+  theme = themes.resolve(name);
+}
+
+function movePicker(step) {
+  const list = themes.names();
+  picker.index = (picker.index + step + list.length) % list.length;
+  previewTheme(list[picker.index]);
+}
+
+function closePicker(keep) {
+  const list = themes.names();
+  if (keep) {
+    const chosen = list[picker.index];
+    try {
+      configLib.set('theme', chosen);
+      cfg = configLib.load();
+      picker.saved = chosen;
+    } catch (e) {
+      picker.saved = '';
+    }
+  } else {
+    previewTheme(picker.previous);
+  }
+  picker.open = false;
+}
+
+// One line, centred on the current theme, that fits the terminal.
+function pickerBar(total) {
+  const list = themes.names();
+  const label = `${BOLD}${paint('accent')}theme${RESET} `;
+  const room = total - 34;
+  const around = 4;
+  const start = Math.max(0, Math.min(picker.index - around, list.length - around * 2 - 1));
+  const shown = list.slice(start, start + around * 2 + 1);
+
+  let bar = '';
+  for (const name of shown) {
+    const t = themes.resolve(name).colours;
+    const rgb = themes.hexToRgb(t.running);
+    const colour = COLOUR_ON && rgb ? `\x1b[38;2;${rgb[0]};${rgb[1]};${rgb[2]}m` : '';
+    const chip = name === list[picker.index] ? `${BOLD}${colour}[${name}]${RESET}` : `${colour}${name}${RESET}`;
+    if (width(bar + ' ' + name) + 4 > room) break;
+    bar += (bar ? ' ' : '') + chip;
+  }
+
+  const hint = `${paint('dim')}←→ pick · enter keep · esc cancel${RESET}`;
+  return `  ${label}${start > 0 ? paint('dim') + '‹ ' + RESET : ''}${bar}` +
+    `${start + shown.length < list.length ? paint('dim') + ' ›' + RESET : ''}  ${hint}`;
+}
+
 // --- text layout (lib/text.js: measurement, clipping, wrapping) ------------
 const { width, clip, pad, wrap, ago, compactNumber, ANSI } = require('./lib/text');
 
@@ -226,8 +292,11 @@ const HEADS = {
 // The title carries the meaning, so it never shrinks below MIN_TITLE. On a
 // narrow terminal, optional columns drop in this order instead.
 const MIN_TITLE = 28;
-const DROP_ORDER = ['mode', 'branch', 'agents', 'tokens', 'effort', 'tasks', 'project',
-  'model', 'session', 'focus', 'ctx', 'cost', 'action', 'src'];
+// Ordered least useful first. The four that survive longest are the ones you
+// actually act on: what it is running on (model, effort), how full the window
+// is (ctx) and what it has cost.
+const DROP_ORDER = ['mode', 'branch', 'agents', 'tokens', 'project', 'session',
+  'src', 'action', 'tasks', 'focus', 'effort', 'model', 'cost', 'ctx'];
 
 function layout(total, requested, indent, gap) {
   let columns = requested.slice();
@@ -414,8 +483,13 @@ function render(snapshot) {
     `${hidden.length ? ` · hidden ${hidden.join(', ')}` : ''}` +
     `${dropped.length ? ` · narrow, dropped ${dropped.join(', ')}` : ''}${RESET}`);
   if (!ONCE) {
-    out.push(`  ${paint('dim')}watching · ${active.refreshMs / 1000}s refresh · grouped by ${active.groupBy} · ` +
-      `config ${configLib.FILE}${created.created ? ' (created)' : ''} · Ctrl+C to exit${RESET}`);
+    if (picker.open) {
+      out.push(pickerBar(total));
+    } else {
+      out.push(`  ${paint('dim')}watching · ${active.refreshMs / 1000}s refresh · grouped by ${active.groupBy}` +
+        ` · t theme · Ctrl+C to exit` +
+        `${picker.saved ? ` · saved theme ${picker.saved}` : ''}${RESET}`);
+    }
   }
   return out.join('\n');
 }
@@ -486,12 +560,46 @@ if (ONCE) {
     paintFrame(snapshot);
   });
 
-  process.on('SIGINT', () => {
+  // The board listens for exactly one key: `t`, which opens the theme picker.
+  // There is no row navigation — this is a display, not a console.
+  const keyboard = process.stdin.isTTY && !flag('no-input');
+
+  const quit = () => {
     clearInterval(dataTimer);
     if (animTimer) clearInterval(animTimer);
     unwatch();
     ccboard.close();
+    if (keyboard) {
+      try { process.stdin.setRawMode(false); } catch (e) { /* ignore */ }
+      process.stdin.pause();
+    }
     process.stdout.write('\x1b[?25h\n');
     process.exit(0);
-  });
+  };
+
+  process.on('SIGINT', quit);
+
+  if (keyboard) {
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (key) => {
+      if (key === '\u0003') return quit();
+
+      if (!picker.open) {
+        if (key === 't') { openPicker(); paintFrame(snapshot); }
+        else if (key === 'q') quit();
+        return;
+      }
+
+      switch (key) {
+        case '\u001b[C': case '\u001b[B': case 'l': case 'j': movePicker(1); break;
+        case '\u001b[D': case '\u001b[A': case 'h': case 'k': movePicker(-1); break;
+        case '\r': case '\n': closePicker(true); break;
+        case '\u001b': case 'q': case 't': closePicker(false); break;
+        default: return;
+      }
+      paintFrame(snapshot);
+    });
+  }
 }

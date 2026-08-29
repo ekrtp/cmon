@@ -14,6 +14,30 @@ const CLAUDE = path.join(HOME, '.claude');
 const SESSIONS = path.join(CLAUDE, 'sessions');
 const PROJECTS = path.join(CLAUDE, 'projects');
 
+// This report is committed to a public repository, so it must describe the FILE
+// FORMATS without publishing what is inside them. Titles, prompts, folder names
+// and the home directory are redacted by default; --raw keeps them for local
+// debugging (do not commit that output).
+const RAW = process.argv.includes('--raw');
+const USER = path.basename(HOME);
+
+function redactPath(p) {
+  if (RAW) return p;
+  return String(p)
+    .split(HOME).join('~')
+    .split(USER).join('you');
+}
+
+// Keep the SHAPE of a title (length, whether it is Turkish, whether it looks
+// like a prompt) without publishing the text itself.
+function redactText(s) {
+  if (RAW) return s;
+  if (s === null || s === undefined) return s;
+  const t = String(s);
+  if (!t.trim()) return t;
+  return `(redacted, ${t.length} chars)`;
+}
+
 const out = [];
 const say = (s) => out.push(s === undefined ? '' : s);
 

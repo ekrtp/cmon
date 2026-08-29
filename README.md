@@ -18,14 +18,14 @@ No dependencies — Node built-ins only.
     STATUS         TITLE                          MODEL     EFFORT  CTX        COST     TASKS  FOCUS
   ──────────────────────────────────────────────────────────────────────────────────────────────────────
   waiting for you · 1
-    !! asking      project-c article summary        opus-5    high    48k 24%    $0.08    2/3    project-c
+    !! asking      Rename the billing columns     opus-5    high    48k 24%    $0.08    2/3    billing-api
 
   running a tool · 1
-    /> running     claudeMonitor fork to ekrtp    opus-5    high    353k 35%   $1.42    3/7    personal-folder
+    /> running     Session monitor: theme picker  opus-5    high    353k 35%   $1.42    3/7    claudeMonitor
 
   finished · 2
-    OK done        project-a: cache-layer          opus-5    high    872k 87%   $24.74   —      project-a
-    OK done        Notes vault klasörü düzen…   opus-5    high    211k 21%   $3.10    —      notes-vault
+    OK done        Cache warmup investigation     opus-5    high    872k 87%   $24.74   —      search-service
+    OK done        Docs site nav restructure      opus-5    high    211k 21%   $3.10    —      docs-site
   ──────────────────────────────────────────────────────────────────────────────────────────────────────
   titles ai-title:3 · user:1 · hidden 1 empty
   watching · 2s refresh · grouped by status · Ctrl+C to exit
@@ -57,7 +57,7 @@ node monitor.js
 | `node monitor.js --themes` | preview every theme in colour and exit |
 | `npm test` | 81 fixture assertions, no network, no deps |
 | `npm run config` | show or edit the config |
-| `npm run probe` / `npm run fields` | re-measure the data sources into `docs/` |
+| `npm run probe` / `npm run fields` | re-measure the data sources (redacted; `--raw` to keep detail) |
 
 `NO_COLOR=1` disables colour; colour also switches off when stdout is not a TTY.
 
@@ -91,8 +91,8 @@ question:
    workspace root. Its folder links are the project list, unioned with the
    root's actual sub-directories (a router file is allowed to lag).
 2. Score those names against the transcript. A **path** mention
-   (`project-c/veri-kesfi`, `informations\connections`) counts three times a bare
-   mention in prose, each line contributes at most four hits, and the tail of
+   (`billing-api/src`, `docs-site\content`) counts three times a bare mention in
+   prose, each line contributes at most four hits, and the tail of
    the conversation counts double — what a session is doing now outranks how it
    opened.
 3. Show the winner only if it clears a floor and beats the runner-up by 1.5×.
@@ -100,8 +100,8 @@ question:
    thin.
 
 Recomputed every 30 seconds per session, and only when the transcript changed.
-Measured on this machine: `personal-folder` 241 vs 28, `project-a` 250 vs 78,
-`notes-vault` 494 vs 18.
+Measured over three live sessions, winner vs runner-up: 241 vs 28, 250 vs 78,
+494 vs 18 — the margin is usually wide enough that the answer is not a guess.
 
 ## Where the title comes from
 
@@ -274,8 +274,9 @@ live sessions: 91 ms cold, 6–9 ms warm.
 - Sixteen themes with hot reload, status grouping, cost/context/focus columns,
   a subtle spinner, flicker-free redraw, and a fixture test suite.
 
-`docs/DATA-SOURCES.md` records what was measured about each file format — Claude
-Code can change them, and that file is the evidence this code rests on.
+`npm run probe` re-measures every file format this code depends on and prints a
+report (`docs/DATA-SOURCES.md`, untracked — it describes YOUR sessions). Claude
+Code can change these formats; the probe is how you find out.
 
 ## Notes
 
