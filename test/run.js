@@ -13,6 +13,7 @@ const configLib = require('../lib/config');
 const tasksLib = require('../lib/tasks');
 const notify = require('../lib/notify');
 const ccboard = require('../lib/ccboard');
+const projects = require('../lib/projects');
 const { isAlive } = require('../lib/platform/win32');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-monitor-test-'));
@@ -272,9 +273,16 @@ is('an unknown session has no usage', null, ccboard.usage('no-such-session-id'))
 
 // ---------------------------------------------------------------- themes
 console.log('\nthemes');
-is('four built-in themes exist',
-  ['dark', 'light', 'solarized', 'mono'],
-  Object.keys(themes.BUILT_IN));
+is('at least 15 built-in themes ship', true, Object.keys(themes.BUILT_IN).length >= 15);
+
+is('the cswap palette is the one claude-swap actually uses',
+  ['#d7875f', '#87af87', '#d7af5f', '#d75f5f'],
+  [themes.BUILT_IN.cswap.running, themes.BUILT_IN.cswap.done,
+    themes.BUILT_IN.cswap.asking, themes.BUILT_IN.cswap.interrupted]);
+
+is('cswap-light is a separate theme', true,
+  themes.names().includes('cswap-light') &&
+  themes.BUILT_IN['cswap-light'].running !== themes.BUILT_IN.cswap.running);
 
 is('every built-in theme defines every required key', [],
   Object.entries(themes.BUILT_IN)
@@ -313,6 +321,60 @@ is('a silly refresh rate falls back to the default', 2000,
 
 is('unknown keys are preserved (forward compatible)', 'keep me',
   configLib.sanitise({ somethingNew: 'keep me' }).somethingNew);
+
+is('an unknown groupBy falls back to status', 'status',
+  configLib.sanitise({ groupBy: 'sideways' }).groupBy);
+
+is('the old group:false spelling still means no grouping', 'none',
+  configLib.sanitise({ group: false }).groupBy);
+
+is('animationMs 0 is kept (it means "hold still")', 0,
+  configLib.sanitise({ animationMs: 0 }).animationMs);
+
+is('an absurd animationMs falls back to the default', configLib.DEFAULTS.animationMs,
+  configLib.sanitise({ animationMs: 5 }).animationMs);
+
+is('density only accepts compact or comfortable',
+  ['compact', 'comfortable'],
+  [configLib.sanitise({ density: 'compact' }).density,
+    configLib.sanitise({ density: 'wat' }).density]);
+
+is('model, effort and ctx sit next to each other by default',
+  ['model', 'effort', 'ctx'],
+  configLib.DEFAULTS.columns.slice(
+    configLib.DEFAULTS.columns.indexOf('model'),
+    configLib.DEFAULTS.columns.indexOf('model') + 3));
+
+// ---------------------------------------------------------------- projects
+console.log('\nproject focus');
+const fakeRoot = path.join(tmp, 'workspace');
+fs.mkdirSync(path.join(fakeRoot, 'alpha-project'), { recursive: true });
+fs.mkdirSync(path.join(fakeRoot, 'beta-tool'), { recursive: true });
+fs.mkdirSync(path.join(fakeRoot, 'node_modules'), { recursive: true });
+fs.writeFileSync(path.join(fakeRoot, 'CLAUDE.md'),
+  '# root\n\n| [`alpha-project/`](alpha-project/CLAUDE.md) | stuff |\n', 'utf8');
+
+is('candidates come from CLAUDE.md plus disk, minus noise',
+  ['alpha-project', 'beta-tool'],
+  projects.candidatesFor(fakeRoot).candidates.map((c) => c.name).sort());
+
+is('the workspace root is found by walking up to CLAUDE.md', fakeRoot,
+  projects.workspaceRoot(path.join(fakeRoot, 'alpha-project')));
+
+is('a path mention outweighs prose', 'beta-tool',
+  (() => {
+    const f = fixture('f1.jsonl', [
+      userLine('I was thinking about alpha-project earlier'),
+      assistantLine([{ type: 'tool_use', id: '1', name: 'Read', input: { file_path: 'beta-tool/lib/x.js' } }], 'tool_use'),
+      assistantLine([{ type: 'tool_use', id: '2', name: 'Read', input: { file_path: 'beta-tool/lib/y.js' } }], 'tool_use'),
+      assistantLine([{ type: 'tool_use', id: '3', name: 'Bash', input: { command: 'cd beta-tool/ && npm test' } }], 'tool_use'),
+    ]);
+    const r = projects.focusOf('sess-focus-1', fakeRoot, f);
+    return r && r.name;
+  })());
+
+is('thin evidence produces no tag at all', null,
+  projects.focusOf('sess-focus-2', fakeRoot, fixture('f2.jsonl', [userLine('hello there')])));
 
 // ---------------------------------------------------------------- platform
 console.log('\nplatform');
