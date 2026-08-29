@@ -34,10 +34,22 @@ No dependencies — Node built-ins only.
 ## Install
 
 ```powershell
-git clone <this fork> claudeMonitor
+git clone https://github.com/ekrtp/claudeMonitor.git
 cd claudeMonitor
 node monitor.js
 ```
+
+Put it on your PATH so it runs from anywhere:
+
+```powershell
+node scripts/install-command.js     # installs `cmon` into ~/.local/bin
+cmon                                # from any directory
+cmon --theme=nord --group=focus     # flags pass straight through
+```
+
+The shim just calls `node <repo>/monitor.js`, so `git pull` updates the command
+with no reinstall. `node scripts/install-command.js --uninstall` removes it
+(moves the shim aside rather than deleting it).
 
 ## Usage
 
@@ -60,6 +72,19 @@ node monitor.js
 | `npm run probe` / `npm run fields` | re-measure the data sources (redacted; `--raw` to keep detail) |
 
 `NO_COLOR=1` disables colour; colour also switches off when stdout is not a TTY.
+
+### The one key: `t`
+
+Press `t` and a theme bar opens along the bottom. Arrow keys (or `h`/`l`) walk
+through the themes and **the whole board recolours as you move**, so you are
+choosing by eye, not by name. `enter` keeps the choice and writes it to your
+config; `esc` puts back what you had. That is the entire keyboard: there is no
+row navigation, because this is a display, not a console. `--no-input` turns even
+that off.
+
+```
+  theme ‹ dracula catppuccin one-dark [rose-pine] ayu monokai ›   ←→ pick · enter keep · esc cancel
+```
 
 ## Statuses
 
@@ -185,12 +210,13 @@ Every change writes a timestamped backup next to the file first.
 
 ### Themes
 
-**Changing the theme — three ways:**
+**Changing the theme — four ways:**
 
 ```powershell
-node monitor.js --themes                    # see them all, in colour, side by side
-node monitor.js --theme=cswap               # just this run
-node scripts/config.js set theme cswap      # permanent; a running monitor picks it up
+# 1. press t while it is running, arrow through them, enter to keep
+node monitor.js --themes                    # 2. see them all, in colour, side by side
+node monitor.js --theme=cswap               # 3. just this run
+node scripts/config.js set theme cswap      # 4. permanent; a running monitor picks it up
 ```
 
 The third writes `theme` into `~/.claude/monitor/config.json`; the file is
