@@ -298,5 +298,8 @@ live sessions: **91 ms cold, 6–9 ms warm**, against a 2 s refresh.
   sessions).
 - Upstream has no LICENSE file. This is a personal fork; ask the original author
   about licensing before publishing anything built on it.
+- [`CHANGELOG.md`](CHANGELOG.md) tracks what changed in each version.
+  [`legacy/`](legacy/) keeps upstream's demo GIF and its generator: superseded
+  here, but kept for provenance.
 
 <div align="center"><sub>Fork of <a href="https://github.com/ibrahimokdadov/claudeMonitor">ibrahimokdadov/claudeMonitor</a></sub></div>
