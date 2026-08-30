@@ -36,7 +36,11 @@ const PAD_Y = 16;
 
 function capture(theme) {
   return execFileSync(process.execPath, [
-    MONITOR, '--once', '--demo', '--no-animation', `--theme=${theme}`,
+    // Pin every display option: an image must not depend on whatever the
+    // author's own config happens to say today.
+    MONITOR, '--once', '--demo', '--no-animation', '--group=status',
+    '--columns=status,title,model,effort,ctx,cost,tasks,focus,time',
+    `--theme=${theme}`,
   ], {
     encoding: 'utf8',
     env: { ...process.env, COLUMNS: String(WIDTH), NO_COLOR: '' },

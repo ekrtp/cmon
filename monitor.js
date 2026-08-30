@@ -14,20 +14,22 @@
 //              cost and sub-agents (dashboard.db), plan progress (~/.claude/tasks)
 //   focus   <- which project the conversation is actually about (lib/projects.js)
 //
-// Usage:
-//   node monitor.js                     live table
-//   node monitor.js --once              render once and exit
-//   node monitor.js --all               include empty tabs and stale sessions
-//   node monitor.js --since=30m         only sessions active in the last 30m
-//   node monitor.js --theme=nord        override the configured theme
-//   node monitor.js --glyphs=emoji      emoji status glyphs
-//   node monitor.js --columns=status,title,cost,time
-//   node monitor.js --group=focus       status | focus | project | none
-//   node monitor.js --compact           tighter rows
-//   node monitor.js --no-animation      hold the status glyphs still
-//   node monitor.js --wide              full session id
-//   node monitor.js --themes            preview every theme and exit
-//   node monitor.js --demo              fabricated sessions (screenshots, testing)
+// Usage:  cmon [options]        (or `node monitor.js` if the command is not installed)
+//   --once                 render once and exit
+//   --all                  include empty tabs and stale sessions
+//   --since=30m            only sessions active in the last 30 minutes
+//   --theme=nord           override the configured theme
+//   --themes               preview every theme and exit
+//   --group=focus          status | focus | project | none
+//   --columns=status,title,cost,time
+//   --glyphs=emoji         emoji status glyphs
+//   --compact              tighter rows
+//   --no-animation         hold the status glyphs still
+//   --wide                 full session id
+//   --no-input             ignore the keyboard
+//   --demo                 fabricated sessions (screenshots, testing)
+//   --version  --help
+// Keys: t theme picker · g grouping · Ctrl+C exit
 // Environment: NO_COLOR=1 disables colour.
 //
 // Config: ~/.claude/monitor/config.json — hot-reloaded, no restart needed.
@@ -52,6 +54,22 @@ const value = (name) => {
   const hit = argv.find((a) => a.startsWith(`--${name}=`));
   return hit ? hit.slice(name.length + 3) : null;
 };
+
+if (flag('version') || flag('v')) {
+  const pkg = require('./package.json');
+  console.log(`${pkg.name} ${pkg.version}`);
+  console.log(pkg.description);
+  console.log('https://github.com/ekrtp/cmon');
+  process.exit(0);
+}
+
+if (flag('help') || flag('h')) {
+  // The header comment of this file is the help text; print the usage block.
+  const src = require('fs').readFileSync(__filename, 'utf8');
+  const usage = src.slice(src.indexOf('// Usage:'), src.indexOf('// Config:'));
+  console.log('\n' + usage.replace(/^\/\/ ?/gm, '  ').trimEnd() + '\n');
+  process.exit(0);
+}
 
 const ONCE = flag('once');
 const ALL = flag('all');

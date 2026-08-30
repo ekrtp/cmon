@@ -208,10 +208,12 @@ narrow terminal columns drop in a fixed order — `model`, `effort`, `ctx` and
 | `--columns=status,title,cost,time` | choose your columns |
 | `--compact` · `--no-animation` · `--wide` | tighter rows · still glyphs · full session id |
 | `--demo` | fabricated sessions (screenshots, testing) |
+| `--version` · `--help` | version · the usage block above |
 | `npm test` | 81 fixture assertions, no network, no deps |
 | `npm run config` | show or edit the config |
 | `npm run probe` | re-measure every file format this depends on |
 | `npm run screenshot` | regenerate the README images from `--demo` |
+| `npm run social` | rebuild the social-preview card |
 
 ### Configuration
 

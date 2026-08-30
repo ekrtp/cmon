@@ -1,0 +1,26 @@
+<!-- Source for assets/social-preview.png (GitHub Settings -> Social preview).
+     Rebuild: npm run screenshot, then render this file at 1280x640, e.g.
+       msedge --headless=new --window-size=1280,640 \n         --screenshot=assets/social-preview.png scripts/social-preview.html -->
+<!doctype html><meta charset="utf-8">
+<style>
+  html,body{margin:0;width:1280px;height:640px;background:#141414;
+    font-family:ui-monospace,Consolas,monospace;overflow:hidden}
+  .wrap{display:flex;flex-direction:column;justify-content:center;align-items:center;
+    height:100%;box-sizing:border-box;padding:22px 40px;gap:12px}
+  h1{margin:0;font-size:40px;color:#d7875f;letter-spacing:-1px;align-self:flex-start}
+  h1 span{color:#8a8a8a;font-size:23px;font-weight:400;margin-left:12px}
+  p{margin:0;font-size:17px;color:#e8e4de;align-self:flex-start}
+  img{max-height:392px;max-width:100%;border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,.5)}
+  .foot{display:flex;gap:24px;font-size:15px;color:#8a8a8a;width:100%}
+  .foot b{color:#87af87;font-weight:600}
+</style>
+<div class="wrap">
+  <h1>cmon<span>claude monitor</span></h1>
+  <p>Every Claude Code session on one board — real titles, status, cost, context, project focus.</p>
+  <img src="../assets/monitor-dark.svg">
+  <div class="foot">
+    <span><b>0</b> dependencies</span><span><b>17</b> themes</span>
+    <span><b>90</b> tests</span><span>reads only, never writes</span>
+    <span style="margin-left:auto">github.com/ekrtp/cmon</span>
+  </div>
+</div>

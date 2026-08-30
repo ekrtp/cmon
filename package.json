@@ -18,7 +18,8 @@
     "install-hooks": "node scripts/install-hooks.js",
     "uninstall-hooks": "node scripts/uninstall-hooks.js",
     "screenshot": "node scripts/screenshot.js",
-    "demo": "node monitor.js --demo --once"
+    "demo": "node monitor.js --demo --once",
+    "social": "node scripts/screenshot.js && echo \"now render scripts/social-preview.html at 1280x640\""
   },
   "dependencies": {},
   "engines": {
