@@ -1,6 +1,6 @@
 {
   "name": "cmon",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "cmon — a read-only wall display for every Claude Code session you have open: real titles, transcript-derived status, cost, context and project focus",
   "main": "monitor.js",
   "bin": {
@@ -14,6 +14,7 @@
     "probe": "node scripts/probe.js",
     "themes": "node monitor.js --themes",
     "fields": "node scripts/probe-fields.js",
+    "probe-titles": "node scripts/probe-titles.js",
     "config": "node scripts/config.js",
     "install-hooks": "node scripts/install-hooks.js",
     "uninstall-hooks": "node scripts/uninstall-hooks.js",

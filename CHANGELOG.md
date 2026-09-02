@@ -4,6 +4,31 @@ This fork's history, newest first. Upstream
 ([ibrahimokdadov/claudeMonitor](https://github.com/ibrahimokdadov/claudeMonitor))
 is the two commits at the bottom.
 
+## 1.0.1
+
+- **Fixed: renaming a session in the IDE did not change the title.** The rename
+  is written into the transcript as a `custom-title` line, which the title chain
+  never looked at. It read a *curated name* out of the ccboard dashboard
+  database instead — and that database had not been written to in five days, so
+  it served the pre-rename name for the one session it still knew about and
+  nothing at all for the nine started since. Renames were invisible either way.
+  - `custom-title` is now the top of the chain, and a curated board name sits
+    below it: the transcript is written by the tool you are typing in, the
+    database by a process that may not be running.
+  - A rename **appends** a record rather than rewriting the old ones (measured:
+    197 copies, 2 distinct values, in one file), so the **newest** copy wins.
+    Same for `ai-title`, which drifts too and is no longer cached forever.
+  - Both records are read from a **64 KB tail** (measured: a re-emitted copy
+    lands ≤30 KB from EOF; the first copy can be 11,981 KB from the start, which
+    no head window reaches) and from the 128 KB head as well, because 9
+    transcripts of 91 wrote the record once and never re-emitted it. Together
+    the two windows return the name the file ends on in **91 of 91** cases.
+  - `node scripts/probe-titles.js` reproduces every number above, including that
+    91-of-91 acceptance check.
+  - Measured over 10 live sessions: 68–81 ms cold, 11–16 ms warm, against
+    64–117 / 10–22 ms for the chain it replaces. Rows showing a name a person
+    typed: **1 → 5**, and the 1 was stale.
+
 ## 1.0.0 — published
 
 - Renamed to **cmon**, which is what the command has been all along.

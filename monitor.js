@@ -263,7 +263,7 @@ function collect() {
     const hook = hookState.get(s.sessionId);
     const t = titles.resolve(s.sessionId, s.cwd, {
       hookPrompt: hook && hook.firstPrompt,
-      userTitle: ccboard.name(s.sessionId),
+      boardTitle: ccboard.name(s.sessionId),
     });
     const st = statusLib.derive(t.jsonl, { idleAfterMs: active.idleAfterMs });
     const money = ccboard.usage(s.sessionId);

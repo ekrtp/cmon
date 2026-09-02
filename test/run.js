@@ -98,6 +98,93 @@ is('tool_result turns are not titles',
   { title: 'the real question', source: 'first-prompt' },
   titles._fromTranscript(fixture('t8.jsonl', [toolResultLine('a'), userLine('the real question')])));
 
+// A rename appends a new custom-title line instead of rewriting the old ones,
+// so the newest copy is the current name (measured: 197 copies, 2 distinct
+// values, in one live transcript).
+is('the newest custom-title wins over an earlier one',
+  { title: 'renamed later', source: 'user' },
+  titles._fromTranscript(fixture('t9.jsonl', [
+    userLine('the first question'),
+    JSON.stringify({ type: 'custom-title', customTitle: 'named first', sessionId: 'x' }),
+    JSON.stringify({ type: 'ai-title', aiTitle: 'what the model called it' }),
+    JSON.stringify({ type: 'custom-title', customTitle: 'renamed later', sessionId: 'x' }),
+  ])));
+
+is('a name a person typed outranks ai-title',
+  { title: 'my name for it', source: 'user' },
+  titles._fromTranscript(fixture('t10.jsonl', [
+    JSON.stringify({ type: 'ai-title', aiTitle: 'model guess' }),
+    JSON.stringify({ type: 'custom-title', customTitle: 'my name for it' }),
+  ])));
+
+is('the newest ai-title wins over the first one',
+  { title: 'second guess', source: 'ai-title' },
+  titles._fromTranscript(fixture('t11.jsonl', [
+    JSON.stringify({ type: 'ai-title', aiTitle: 'first guess' }),
+    userLine('the first question'),
+    JSON.stringify({ type: 'ai-title', aiTitle: 'second guess' }),
+  ])));
+
+// The bug this chain was rewritten for: in a real transcript the first
+// custom-title copy sat 11,981 KB into the file, far past any head window, and
+// only the tail carried the current one.
+is('a custom-title far past the head window is still found',
+  { title: 'late rename', source: 'user' },
+  titles._fromTranscript(fixture('t12.jsonl', [
+    userLine('the first question'),
+    userLine('x'.repeat(300 * 1024)),
+    JSON.stringify({ type: 'custom-title', customTitle: 'late rename' }),
+  ])));
+
+// The other half of that measurement: 9 transcripts of 91 wrote a single
+// custom-title copy and never re-emitted it, so the head is scanned for it too
+// — but a tail copy, being newer, still wins.
+is('a custom-title only near the head is still found',
+  { title: 'named once, early', source: 'user' },
+  titles._fromTranscript(fixture('t12b.jsonl', [
+    JSON.stringify({ type: 'custom-title', customTitle: 'named once, early' }),
+    userLine('x'.repeat(300 * 1024)),
+    JSON.stringify({ type: 'ai-title', aiTitle: 'model guess' }),
+  ])));
+
+is('a tail copy outranks a head copy of the same record',
+  { title: 'renamed at the end', source: 'user' },
+  titles._fromTranscript(fixture('t12c.jsonl', [
+    JSON.stringify({ type: 'custom-title', customTitle: 'named at the start' }),
+    userLine('x'.repeat(300 * 1024)),
+    JSON.stringify({ type: 'custom-title', customTitle: 'renamed at the end' }),
+  ])));
+
+is('an emptied custom-title falls through to the next source',
+  { title: 'model guess', source: 'ai-title' },
+  titles._fromTranscript(fixture('t13.jsonl', [
+    JSON.stringify({ type: 'ai-title', aiTitle: 'model guess' }),
+    JSON.stringify({ type: 'custom-title', customTitle: 'was named' }),
+    JSON.stringify({ type: 'custom-title', customTitle: '' }),
+  ])));
+
+// resolve() cannot be pointed at a fixture (it looks transcripts up under
+// ~/.claude/projects by session id), so the sources below the transcript are
+// checked with an id that has no transcript at all.
+const noFile = 'ffffffff-0000-0000-0000-000000000000';
+const resolved = (opts) => {
+  const r = titles.resolve(noFile, 'C:/ws/proj', opts);
+  return { title: r.title, source: r.source };
+};
+
+is('a curated board name is used when the transcript offers nothing',
+  { title: 'Board name', source: 'board' }, resolved({ boardTitle: 'Board name' }));
+
+is('the board name outranks the hook prompt',
+  { title: 'Board name', source: 'board' },
+  resolved({ boardTitle: 'Board name', hookPrompt: 'hooked' }));
+
+is('the hook prompt is used when there is no board name',
+  { title: 'hooked', source: 'hook' }, resolved({ hookPrompt: 'hooked' }));
+
+is('the last resort is the project name plus a short id',
+  { title: 'proj · ffffffff', source: 'fallback' }, resolved({}));
+
 is('cwd encodes to the project directory (measured, case preserved)',
   'c--Users-dev-user-Documents-workspace',
   titles.encodePath('c:\\Users\\dev.user\\Documents\\workspace'));

@@ -137,15 +137,22 @@ anything from disk.
 
 ## Where the title comes from
 
-1. **A name you gave the session** — the ccboard dashboard database
-   (`~/.claude/agent-dashboard/dashboard.db`, `sessions.name`). Renaming a
-   session never reaches Claude Code's own files, which is why tools that read
-   only `~/.claude/sessions` keep showing a stale title.
-2. **`ai-title`** from the transcript.
-3. **The first non-meta user message** — IDE notifications, slash-command output
+1. **The name you typed in the IDE** — a `custom-title` line in the transcript.
+   Renaming a session never reaches Claude Code's own registry
+   (`~/.claude/sessions/<PID>.json` says `nameSource: "derived"` in 33 of 33
+   records and carries a generated handle like `vscode-dd`), which is why tools
+   that read only that directory keep showing a stale title. The rename is
+   **appended**, not rewritten, so the **newest** copy is the current name.
+2. **A curated name from the ccboard dashboard database**
+   (`~/.claude/agent-dashboard/dashboard.db`, `sessions.name`) — below the
+   transcript on purpose: that file is written by a process that may not be
+   running, and measured here it was five days stale, still serving the
+   pre-rename name for a session the transcript had already renamed.
+3. **`ai-title`** from the transcript — newest copy, for the same reason.
+4. **The first non-meta user message** — IDE notifications, slash-command output
    and `<tag>`-wrapped turns are skipped.
-4. **`firstPrompt`** recorded by the optional hook.
-5. **Project name + short session id.**
+5. **`firstPrompt`** recorded by the optional hook.
+6. **Project name + short session id.**
 
 The footer names the source every visible row used. Two sessions that resolve to
 the same title get their short id appended instead of looking like duplicates.
@@ -286,10 +293,15 @@ and it backs up `settings.json` first.
 | `<workspace>/CLAUDE.md` | the project list for `focus` | read only |
 | `~/.claude/monitor/config.json` | configuration | read + created once |
 
-Transcripts are never loaded whole: 128 KB from the head for the title, 64 KB
-from the tail for the status, 32 KB + 192 KB for the focus scan — all cached per
-file mtime, and a resolved `ai-title` is cached permanently. Measured over 33
-live sessions: **91 ms cold, 6–9 ms warm**, against a 2 s refresh.
+Transcripts are never loaded whole: 64 KB from the tail for the title and the
+status, 128 KB from the head for the first prompt, 32 KB + 192 KB for the focus
+scan — all cached per file mtime. Only the head read is cached hard: a
+transcript's first prompt cannot change, whereas both `custom-title` and
+`ai-title` do, so they are re-read from the tail whenever the file moves.
+Measured over 10 live sessions, four runs each: **68–81 ms cold, 11–16 ms warm**
+against a 2 s refresh — the same order as the chain it replaced (64–117 ms cold,
+10–22 ms warm), which found a name a person had typed for 1 of those 10 rows,
+and a five-day-stale one at that. This chain finds 5 of 10, all current.
 
 ## Differences from upstream
 
