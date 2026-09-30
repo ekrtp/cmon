@@ -19,12 +19,24 @@ is the two commits at the bottom.
     rules and the same stall rule. `status.derive()` takes `{ sidechain: true }`
     for this: every line of a sub-agent transcript is `isSidechain`, which the
     session derivation skips by design.
+  - Sub-agents stall on their own threshold, `agentIdleAfterMs` (15 min), not
+    the session's 2 min: measured, a working sub-agent can sit silent for 745 s
+    inside one Bash call. A plain sub-agent whose last line is a text block with
+    no `stop_reason` (it happens: once in 164) settles as `done`, not `idle`.
   - A workflow line shows its name, newest phase and `done/total`; inside it,
-    every open agent plus the two that finished last. Finished nodes stay for
-    `agentLingerMs` (10 min); at most `agentLines` (8) lines per session, the
-    rest summed as `+N more`.
-  - A session that reads `done` while its workflow runs on says `wf running` in
-    its ACTION cell.
+    every open or stuck agent plus the two that finished last. `done` counts
+    result lines only — a quiet agent is not done — and a retried agent (same
+    journal key, new agentId, measured on resumed runs) counts once: a run of 6
+    had read 11/11. On a narrow terminal the name is cut, never `done/total`,
+    and every cut shows an ellipsis.
+  - Finished nodes stay for `agentLingerMs` (10 min); at most `agentLines` (8)
+    lines per session, the rest summed as `+N more agents` or
+    `+1 more workflow, 3 agents` — nodes, not lines.
+  - The frame never grows taller than the terminal: the trees shrink to fit, so
+    a short IDE terminal panel does not scroll on every repaint.
+  - A session that reads `done` while its workflow runs on (also between two
+    agents, when none is open) says `wf running` in its ACTION cell, or
+    `done +wf` in STATUS when a narrow terminal has dropped ACTION.
   - `a` toggles the tree and keeps the choice, `--no-agents` hides it for a run,
     `showAgents` in the config. The AGENTS column counts from the same files.
   - Cost, measured over 8 live sessions carrying 95 sub-agents: 125 ms on the
@@ -33,6 +45,8 @@ is the two commits at the bottom.
     incrementally, and its result lines (up to 35 KB) are never parsed. One
     tool result can outgrow the 32 KB tail (measured: 316 KB lines, in 6 of 148
     agent transcripts), so that window widens only when it holds no whole line.
+    An unchanged journal is not read at all, even one ending in a cut-off line,
+    and cache entries unused for 10 minutes are swept.
 - `status.derive()`: a tool result carrying `toolEndsTurn: true` ends the turn
   (`done`) — how a workflow agent finishes, on its `StructuredOutput` call.
 - **Fixed: lines wider than the terminal.** Whatever followed the last column

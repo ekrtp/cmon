@@ -289,7 +289,8 @@ function collect() {
     const focus = projects.focusOf(s.sessionId, s.cwd, t.jsonl);
     const lastEvent = Math.max(st.lastEventMs || 0, t.mtimeMs || 0, (hook && hook.when) || 0);
     const tree = subagents.forSession(s.sessionId, t.jsonl, {
-      idleAfterMs: active.idleAfterMs, lingerMs: active.agentLingerMs, maxLines: active.agentLines,
+      idleAfterMs: active.idleAfterMs, agentIdleAfterMs: active.agentIdleAfterMs,
+      lingerMs: active.agentLingerMs, maxLines: active.agentLines,
     });
 
     return {
@@ -492,12 +493,30 @@ const CHILD_COLUMNS = ['status', 'time'];
 const GENERIC_AGENT = ['general-purpose', 'workflow-subagent', ''];
 
 // A session that launched a workflow ends its own turn and reads "done" while
-// the workflow is still working. The idle ACTION cell says so, or the row
-// looks finished — and it still does when the tree is switched off.
+// the workflow is still working — including between two of its agents, when
+// no agent is open at all. The ACTION cell says so, or the row looks finished.
+// ACTION is among the first columns a narrow terminal drops, so without it the
+// STATUS cell (never dropped) carries a short form: "done +wf", "done +2ag".
 function backgroundWork(row) {
   const tc = row.tree && row.tree.counts;
-  if (!tc || !tc.running || (row.status !== 'done' && row.status !== 'idle')) return '';
-  return tc.workflows ? `${WF_MARK()} running` : `${tc.running} agent${tc.running === 1 ? '' : 's'}`;
+  const what = row.status === 'done' || row.status === 'idle' ? subagents.busy(tc) : '';
+  if (!what) return '';
+  return what === 'workflow' ? `${WF_MARK()} running` : `${tc.running} agent${tc.running === 1 ? '' : 's'}`;
+}
+
+// "+N more" in nodes, with their kind: a cut workflow is not "4 more agents".
+function moreText(tree) {
+  const h = tree.hidden;
+  const n = (k, word) => `${k} ${word}${k === 1 ? '' : 's'}`;
+  if (!h || !(h.workflows || h.agents)) return `+${tree.overflow} more`;
+  if (!h.workflows) return `+${h.agents} more ${h.agents === 1 ? 'agent' : 'agents'}`;
+  return `+${n(h.workflows, 'more workflow')}${h.agents ? ', ' + n(h.agents, 'agent') : ''}`;
+}
+
+function backgroundMark(row) {
+  const tc = row.tree && row.tree.counts;
+  if (!backgroundWork(row)) return '';
+  return tc.workflows ? `+${WF_MARK()}` : `+${tc.running}ag`;
 }
 
 // Group heading order: the statuses that want you come first, matching the row
@@ -580,18 +599,42 @@ function render(snapshot) {
   while (spanEnd < cols.length && !CHILD_COLUMNS.includes(cols[spanEnd])) spanEnd++;
   const titleSpan = cols.slice(titleAt, spanEnd).reduce((sum, c, i) => sum + w[c] + (i ? gap : 0), 0);
 
-  // [text, colour] pieces laid into exactly `max` cells, clipped in plain text
-  // so an escape is never cut in half.
+  // [text, colour, keep] pieces laid into exactly `max` cells, clipped in
+  // plain text so an escape is never cut in half. A cut always shows as '…',
+  // also when a whole later piece is what fell off. A `keep` piece (a
+  // workflow's done/total) has its room reserved at the end, so a long name
+  // gives way to it instead of the other way round.
+  const ellipsize = (t, n) => {
+    let out = '';
+    for (const ch of t) { if (width(out + ch) > n - 1) break; out += ch; }
+    return out + '…';
+  };
   const fit = (parts, max) => {
+    const put = (text, code) => (code || '') + text + (code ? RESET : '');
+    const kept = parts.filter((p) => p[0] && p[2]);
+    const keepW = kept.reduce((n, p) => n + width(p[0]), 0);
+    const reserve = keepW && keepW <= max / 2 ? keepW : 0;
+    const flow = reserve ? parts.filter((p) => !p[2]) : parts;
+    const room = max - reserve;
+    const live = flow.filter((p) => p[0]);
     let used = 0;
     let s = '';
-    for (const [text, code] of parts) {
-      if (!text || used >= max) continue;
-      const t = clip(text, max - used);
-      s += (code || '') + t + (code ? RESET : '');
+    for (let i = 0; i < live.length; i++) {
+      const [text, code] = live[i];
+      const avail = room - used;
+      if (avail <= 0) break;
+      const later = i < live.length - 1;
+      if (width(text) < avail || (width(text) === avail && !later)) {
+        s += put(text, code);
+        used += width(text);
+        continue;
+      }
+      const t = ellipsize(text, avail);
+      s += put(t, code);
       used += width(t);
-      if (t !== text) break;
+      break;
     }
+    if (reserve) { for (const [text, code] of kept) s += put(text, code); used += reserve; }
     return s + ' '.repeat(Math.max(0, max - used));
   };
 
@@ -601,8 +644,12 @@ function render(snapshot) {
   };
 
   const treeLines = (row) => {
-    const tree = row.tree;
+    let tree = row.tree;
     if (!active.showAgents || !tree || !tree.items || !tree.items.length) return [];
+    // A short terminal: fitToScreen() handed this row a smaller budget.
+    const cap = treeCaps ? treeCaps.get(row.sessionId) : undefined;
+    if (cap === 0) return [];
+    if (cap !== undefined && cap < subagents.lineCount(tree)) tree = subagents.fit(tree, cap);
     const T = TREE;
     const top = tree.items.length + (tree.overflow ? 1 : 0);
     const entries = [];
@@ -616,21 +663,23 @@ function render(snapshot) {
         status: wf.state,
         statusText: wf.state === 'interrupted' ? wf.status : wf.state,
         label: `${WF_MARK()} ${wf.name}`,
-        detail: [wf.phase, `${wf.done}/${wf.total}`].filter(Boolean).join(' · '),
+        detail: wf.phase,
+        counter: `${wf.done}/${wf.total}`,
         age: wf.lastEventMs,
       });
       wf.agents.forEach((a, k) => entries.push(agentEntry(a,
         (lastTop ? T.blank : T.pipe) + (k === wf.agents.length - 1 ? T.last : T.mid))));
     });
-    if (tree.overflow) entries.push({ prefix: T.last, more: tree.overflow });
+    if (tree.overflow) entries.push({ prefix: T.last, more: moreText(tree) });
 
     return entries.map((e) => {
       const needsYou = e.status === 'asking' || e.status === 'interrupted';
       const parts = e.more
-        ? [[e.prefix, paint('border')], [`+${e.more} more`, paint('dim')]]
+        ? [[e.prefix, paint('border')], [e.more, paint('dim')]]
         : [[e.prefix, paint('border')],
           [e.label, needsYou ? BOLD + (paint(e.status) || '') : ''],
-          [e.detail ? ' · ' + e.detail : '', paint('dim')]];
+          [e.detail ? ' · ' + e.detail : '', paint('dim')],
+          [e.counter ? ' · ' + e.counter : '', paint('dim'), true]];
       const segs = [];
       for (let i = 0; i < cols.length; i++) {
         const c = cols[i];
@@ -661,7 +710,9 @@ function render(snapshot) {
       height = Math.max(height, chunks[c].length);
     }
 
-    const cellText = (c, i) => (chunks[c] ? (chunks[c][i] || '') : (i === 0 ? cell(row, c) : ''));
+    const mark = cols.includes('action') ? '' : backgroundMark(row);
+    const opening = (c) => (c === 'status' && mark ? `${cell(row, c)} ${mark}` : cell(row, c));
+    const cellText = (c, i) => (chunks[c] ? (chunks[c][i] || '') : (i === 0 ? opening(c) : ''));
     const renderLine = (i) => cols.map((c) => {
       const text = pad(cellText(c, i), w[c]);
       if (i > 0 && !chunks[c]) return text;                          // continuation: blank
@@ -743,11 +794,49 @@ function render(snapshot) {
   return out.map((l) => clipAnsi(l, total)).join('\n');
 }
 
+// The frame is repainted in place, so it must fit the terminal's height: one
+// line more and every repaint scrolls, the header leaves the screen and the
+// scrollback fills. The tree is what gives way — sessions are never cut. Its
+// budget is whatever the frame without trees leaves over, handed out one line
+// at a time across the sessions that have a tree, so each keeps at least its
+// "+N more" line before any gets a second one.
+// Height comes from the terminal; LINES stands in when piped (tests).
+let treeCaps = null;   // sessionId -> tree lines allowed; null = no limit
+function screenRows() {
+  if (process.stdout.isTTY && process.stdout.rows) return process.stdout.rows;
+  return Number(process.env.LINES) || 0;
+}
+
+function fitToScreen(snapshot) {
+  const full = render(snapshot);
+  const rows = screenRows();
+  const height = (text) => text.split('\n').length;
+  if (!rows || !active.showAgents || height(full) <= rows) return full;
+  const withTrees = snapshot.rows.filter((r) => subagents.lineCount(r.tree) > 0);
+  if (!withTrees.length) return full;
+  try {
+    treeCaps = new Map(withTrees.map((r) => [r.sessionId, 0]));
+    let budget = rows - height(render(snapshot));
+    let moved = true;
+    while (budget > 0 && moved) {
+      moved = false;
+      for (const r of withTrees) {
+        if (budget <= 0) break;
+        const cap = treeCaps.get(r.sessionId);
+        if (cap < subagents.lineCount(r.tree)) { treeCaps.set(r.sessionId, cap + 1); budget--; moved = true; }
+      }
+    }
+    return render(snapshot);
+  } finally {
+    treeCaps = null;
+  }
+}
+
 // Flicker-free: home the cursor and clear to end of line rather than wiping the
 // screen every frame.
 let previousLines = 0;
 function paintFrame(snapshot) {
-  const text = render(snapshot);
+  const text = fitToScreen(snapshot);
   if (ONCE) {
     process.stdout.write(text + '\n');
     return;

@@ -616,10 +616,17 @@ is('an old meta with no transcript is neither running nor shown', false, 'Orphan
 is('counts cover every agent, visible or not', { running: 2, total: 4, workflows: 0 }, plain.counts);
 is('open agents come first, finished ones after', 'done', plain.agents[plain.agents.length - 1].status);
 
-is('the stall rule applies to sub-agents too', 'idle',
+is('a sub-agent quiet for longer than a session may be is still running', 'running',
   (() => {
     const r = subagents.forSession(s1.id, s1.jsonlPath,
       { now: Date.now() + 10 * 60000, idleAfterMs: 120000, lingerMs: 3600000 });
+    return byLabel(r)['Profile the cold path'].status;
+  })());
+
+is('the stall rule applies to sub-agents, on their own threshold', 'idle',
+  (() => {
+    const r = subagents.forSession(s1.id, s1.jsonlPath,
+      { now: Date.now() + 20 * 60000, idleAfterMs: 120000, lingerMs: 3600000 });
     return byLabel(r)['Profile the cold path'].status;
   })());
 
@@ -726,11 +733,115 @@ is('a finished run older than the linger window is hidden, but still counted', [
     return [r.workflows.length, r.counts.total];
   })());
 
-is('inside a workflow: every open agent, at most two finished', [1, 2],
+// fix-1-r1 has a fresh meta, review-2 only its started line: both starting.
+is('inside a workflow: every open agent, at most two finished', [2, 2],
   (() => {
     const w = subagents.forSession(s2.id, s2.jsonlPath, {}).workflows[0];
     const open = w.agents.filter((a) => a.status === 'running' || a.status === 'thinking');
     return [open.length, w.agents.length - open.length];
+  })());
+
+// A resumed run starts the same key again under a new agentId (measured).
+const s4 = session('sess-retry');
+const run4 = path.join(s4.sub, 'workflows', 'wf_dddd4444-004');
+const journal4 = write(path.join(run4, 'journal.jsonl'), [
+  JSON.stringify({ type: 'launched' }),
+  JSON.stringify({ type: 'started', key: 'v2:k1', agentId: 'r1', label: 'impl-1', phase: 'Task 1' }),
+  JSON.stringify({ type: 'started', key: 'v2:k1', agentId: 'r2', label: 'impl-1', phase: 'Task 1' }),
+]);
+for (const [id, ms] of [['r1', 60000], ['r2', 5000]]) {
+  write(path.join(run4, `agent-${id}.meta.json`), [wfMeta('impl-1', 'Task 1')]);
+  age(write(path.join(run4, `agent-${id}.jsonl`), [brief(), bash('1')]), ms);
+}
+is('a retried agent (same key, new agentId) is one agent, not two', [1, 0, 1, ['impl-1'], 1],
+  (() => {
+    const r = subagents.forSession(s4.id, s4.jsonlPath, {});
+    const w = r.workflows[0];
+    return [w.total, w.done, w.running, w.agents.map((a) => a.label), r.counts.total];
+  })());
+is('...and the retry\'s result finishes it; a late result for the old attempt is ignored', [1, 1],
+  (() => {
+    fs.appendFileSync(journal4, JSON.stringify({ type: 'result', key: 'v2:k1', agentId: 'r1', result: {} }) + '\n');
+    const before = subagents.forSession(s4.id, s4.jsonlPath, {}).workflows[0].done;
+    fs.appendFileSync(journal4, JSON.stringify({ type: 'result', key: 'v2:k1', agentId: 'r2', result: {} }) + '\n');
+    const w = subagents.forSession(s4.id, s4.jsonlPath, {}).workflows[0];
+    return [before + w.done, w.total];
+  })());
+
+// A workflow agent inside a long Bash call: quiet, but not finished.
+const s5 = session('sess-long-call');
+const run5 = path.join(s5.sub, 'workflows', 'wf_eeee5555-005');
+age(write(path.join(run5, 'journal.jsonl'), [
+  JSON.stringify({ type: 'launched' }),
+  JSON.stringify({ type: 'started', key: 'v2:t', agentId: 't1', label: 'test-suite', phase: 'Verify' }),
+]), 185000);
+write(path.join(run5, 'agent-t1.meta.json'), [wfMeta('test-suite', 'Verify')]);
+age(path.join(run5, 'agent-t1.meta.json'), 185000);
+age(write(path.join(run5, 'agent-t1.jsonl'), [brief(), bash('1')]), 180000);
+is('three minutes inside one tool call: still running, and the run with it', ['running', 'running', 0, 1, 1],
+  (() => {
+    const r = subagents.forSession(s5.id, s5.jsonlPath, {});
+    const w = r.workflows[0];
+    return [w.agents[0].status, w.state, w.done, r.counts.running, r.counts.workflows];
+  })());
+is('a stalled agent with no result is idle but never counted as done, and stays visible', ['idle', 0, 1],
+  (() => {
+    const w = subagents.forSession(s5.id, s5.jsonlPath, { now: Date.now() + 30 * 60000, lingerMs: 3600000 }).workflows[0];
+    return [w.agents[0].status, w.done, w.agents.length];
+  })());
+
+// Between two agents no agent is open, but the run is: the session is not idle.
+const s6 = session('sess-between');
+write(path.join(s6.sub, 'workflows', 'wf_ffff6666-006', 'journal.jsonl'), [
+  JSON.stringify({ type: 'launched' }),
+  JSON.stringify({ type: 'started', key: 'v2:a', agentId: 'b1', label: 'impl-1', phase: 'Task 1' }),
+  JSON.stringify({ type: 'result', key: 'v2:a', agentId: 'b1', result: {} }),
+]);
+is('between two workflow agents the session still has background work', ['running', 0, 'workflow'],
+  (() => {
+    const r = subagents.forSession(s6.id, s6.jsonlPath, {});
+    return [r.workflows[0].state, r.counts.running, subagents.busy(r.counts)];
+  })());
+is('busy() is empty when nothing runs', ['', 'agents'],
+  [subagents.busy({ running: 0, workflows: 0 }), subagents.busy({ running: 2, workflows: 0 })]);
+
+is('a journal ending in a cut line that never completes is not re-read every tick', 0,
+  (() => {
+    fs.appendFileSync(path.join(s6.sub, 'workflows', 'wf_ffff6666-006', 'journal.jsonl'),
+      '{"type":"result","key":"v2:z","agentId":"zz","result":{"notes":"' + 'y'.repeat(40000));
+    subagents.forSession(s6.id, s6.jsonlPath, {});
+    const before = subagents._stats.reads;
+    for (let i = 0; i < 5; i++) subagents.forSession(s6.id, s6.jsonlPath, {});
+    return subagents._stats.reads - before;
+  })());
+
+// A plain sub-agent can end on a text block with no stop_reason (measured once
+// in 164 transcripts; 1346 other such lines were followed by more).
+const lastWords = () => JSON.stringify({ type: 'assistant', isSidechain: true,
+  message: { content: [{ type: 'text', text: 'Sent the review to the controller.' }], stop_reason: null } });
+const s7 = session('sess-last-words');
+write(path.join(s7.sub, 'agent-p1.meta.json'), [plainMeta('Write the review', 'sonnet')]);
+const p1 = write(path.join(s7.sub, 'agent-p1.jsonl'), [brief(), lastWords()]);
+is('a text block with no stop_reason is generating while fresh', 'thinking',
+  byLabel(subagents.forSession(s7.id, s7.jsonlPath, {}))['Write the review'].status);
+is('...and settles as done, not idle, once it has been quiet', 'done',
+  (() => {
+    age(p1, 20 * 60000);
+    return byLabel(subagents.forSession(s7.id, s7.jsonlPath, { lingerMs: 3600000 }))['Write the review'].status;
+  })());
+is('status.derive tells a text block from a thinking block', ['partial-text', 'partial-turn'],
+  [statusLib.derive(fixture('pt1.jsonl', [brief(), lastWords()]), { sidechain: true, now: Date.now() }).source,
+    statusLib.derive(fixture('pt2.jsonl', [brief(), JSON.stringify({ type: 'assistant', isSidechain: true,
+      message: { content: [{ type: 'thinking', thinking: '...' }], stop_reason: null } })]),
+    { sidechain: true, now: Date.now() }).source]);
+
+// Two lines: the running run's heading, then "+1 more workflow, 5 agents" —
+// its 4 agents, and the finished run with its 1.
+is('fit() re-trims a tree to a smaller budget and names what it cut', [2, { workflows: 1, agents: 5 }],
+  (() => {
+    const r = subagents.forSession(s2.id, s2.jsonlPath, {});
+    const small = subagents.fit(r, 2);
+    return [subagents.lineCount(small), small.hidden];
   })());
 
 const s3 = session('sess-many');
@@ -764,6 +875,13 @@ is('a thinking block with no stop_reason yet is still generating', 'thinking',
       message: { content: [{ type: 'thinking', thinking: '...' }], stop_reason: null } }),
   ]), { sidechain: true, now: Date.now() }).status);
 
+is('cache entries nobody asks for any more are swept', [true, 0],
+  (() => {
+    const had = subagents._cacheSize() > 0;
+    subagents._sweep(Date.now() + subagents.FORGET_MS + 1000);
+    return [had, subagents._cacheSize()];
+  })());
+
 is('the agent tree is on by default and can be turned off', [true, false],
   [configLib.sanitise({}).showAgents, configLib.sanitise({ showAgents: false }).showAgents]);
 is('agentLines and agentLingerMs fall back when absurd', [8, 600000],
@@ -774,9 +892,9 @@ is('agentLines and agentLingerMs fall back when absurd', [8, 600000],
 console.log('\nrender (demo)');
 const { execFileSync } = require('child_process');
 const MONITOR = path.join(__dirname, '..', 'monitor.js');
-const board = (cols, extra) => execFileSync(process.execPath, [MONITOR, '--demo', '--once', ...(extra || [])], {
+const board = (cols, extra, lines) => execFileSync(process.execPath, [MONITOR, '--demo', '--once', ...(extra || [])], {
   encoding: 'utf8',
-  env: { ...process.env, COLUMNS: String(cols), NO_COLOR: '' },
+  env: { ...process.env, COLUMNS: String(cols), LINES: String(lines || ''), NO_COLOR: '' },
 }).replace(/\x1b\[[0-9;]*m/g, '');
 const widest = (out) => Math.max(...out.split('\n').map((l) => text.width(l)));
 
@@ -793,6 +911,21 @@ is('every grouping keeps the tree inside the width', true,
   }));
 is('--no-agents hides the tree', false, board(120, ['--no-agents']).includes('├─ '));
 is('a session whose workflow is still running says so', true, board(160).includes('wf running'));
+is('...also when ACTION is dropped and the tree is off: in the STATUS cell', true,
+  /done \+wf\s+Migrate the auth tables/.test(board(80, ['--no-agents'])));
+is('a narrow workflow line keeps its done/total and marks the cut', true,
+  (() => {
+    const line = board(60).split('\n').find((l) => l.includes('release-checklist'));
+    return Boolean(line) && line.includes('3/4') && line.includes('…');
+  })());
+is('a short terminal shrinks the tree so the frame fits its height', [true, true, true],
+  (() => {
+    const tall = board(100, ['--group=none']).split('\n').length;
+    const out = board(100, ['--group=none'], 22);
+    const n = out.split('\n').length - 1;   // --once ends with a newline
+    return [tall - 1 > 22, n <= 22, out.includes('more')];
+  })());
+is('cut tree lines are counted in agents, not lines', true, board(120).includes('+1 more agent'));
 
 is('clipAnsi cuts a coloured line without breaking an escape', [5, true],
   (() => {

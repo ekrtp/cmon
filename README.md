@@ -10,7 +10,7 @@ transcript · what each one is costing you · and which project it is really abo
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-3c873a)](https://nodejs.org)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-2ea043)](package.json)
 [![Platform](https://img.shields.io/badge/platform-Windows-0078d4)](lib/platform/win32.js)
-[![Tests](https://img.shields.io/badge/tests-138%20passing-2ea043)](test/run.js)
+[![Tests](https://img.shields.io/badge/tests-155%20passing-2ea043)](test/run.js)
 [![Themes](https://img.shields.io/badge/themes-17-d7875f)](lib/themes.js)
 [![License](https://img.shields.io/badge/license-see%20notes-lightgrey)](#licensing)
 
@@ -146,7 +146,7 @@ beneath the title, sharing the session's zebra band so the block reads as one:
   >> running     Cache warmup takes 40s on cold start       opus-5   96k/200k   1s
   >> running     ├─ Profile the cold start path · Bash · sonnet                 1s
   .. thinking    ├─ Compare cache libraries · sonnet                            6s
-                 └─ +1 more
+                 └─ +1 more agent
   OK done        Migrate the auth tables      wf running    opus-5   174k/200k  34m
   >> running     └─ wf release-checklist · Task 2 · 3/4                         3s
   OK done           ├─ fix-1-r1 · sonnet                                        9m
@@ -154,18 +154,29 @@ beneath the title, sharing the session's zebra band so the block reads as one:
 ```
 
 - **Each child has its own status**, read from its own transcript with the same
-  rules as a session (`running`, `thinking`, `asking`, `done`, `idle`) and the
-  same stall rule, so a dead agent does not spin forever. A sub-agent that was
-  spawned but has written nothing yet reads as `thinking`.
+  rules as a session (`running`, `thinking`, `asking`, `done`, `idle`) and a
+  stall rule of its own, so a dead agent does not spin forever. Sub-agents sit
+  silent far longer than sessions do — measured, up to 745 s inside one Bash
+  call — so they read `idle` only after 15 quiet minutes (`agentIdleAfterMs`),
+  not after 2. A sub-agent that was spawned but has written nothing yet reads as
+  `thinking` while its meta file is fresh (`idleAfterMs`).
 - **A workflow line** names the run (from its script, or from the summary it
-  writes when it ends), its newest phase and `done/total`. Inside it: every
-  agent still working, plus the two that finished last.
+  writes when it ends), its newest phase and `done/total`. `done` comes from
+  the run's journal only: an agent that went quiet is not done, and one that was
+  restarted (a resumed run starts it again under a new id) counts once. Inside
+  it: every agent still working or stuck, plus the two that finished last. On a
+  narrow terminal the name gives way before `done/total` does.
 - **What stays on screen:** everything that is working, plus whatever finished
   in the last 10 minutes (`agentLingerMs`). At most 8 lines per session
-  (`agentLines`); the rest is summed up as `+N more`.
+  (`agentLines`); the rest is summed up as `+N more agents` (or
+  `+1 more workflow, 3 agents`). The frame also never grows taller than the
+  terminal: when it would, the trees shrink to fit — every session keeps its own
+  lines — so the repaint does not scroll.
 - **A session that launched a workflow** usually ends its own turn and reads
-  `done` while the workflow runs on. Its ACTION cell then says `wf running`, so
-  it does not look finished — even with the tree hidden.
+  `done` while the workflow runs on, also between two of its agents when none
+  is open. Its ACTION cell then says `wf running`; when a narrow terminal has
+  dropped ACTION, the STATUS cell says `done +wf` (or `done +2ag` for plain
+  sub-agents) instead. Either way it shows with the tree hidden too.
 - The AGENTS column (`running/total`) now counts from the same files, and falls
   back to the dashboard database only when there are none.
 
@@ -296,7 +307,8 @@ touch the config of a board you have open.
   "notifications": false,
   "showAgents": true,
   "agentLingerMs": 600000,
-  "agentLines": 8
+  "agentLines": 8,
+  "agentIdleAfterMs": 900000
 }
 ```
 
@@ -337,8 +349,8 @@ and it backs up `settings.json` first.
 
 Transcripts are never loaded whole: 64 KB from the tail for the title and the
 status, 128 KB from the head for the first prompt, 32 KB + 192 KB for the focus
-scan, 32 KB from the tail of each sub-agent transcript — all cached per file
-mtime. A workflow journal is read incrementally, new bytes only, and its result
+scan, 32 KB from the tail of each sub-agent transcript (widened, up to 1 MB,
+only when a single line fills it) — all cached per file mtime. A workflow journal is read incrementally, new bytes only, and its result
 lines (up to 35 KB each) are never parsed. Only the head read is cached hard: a
 transcript's first prompt cannot change, whereas both `custom-title` and
 `ai-title` do, so they are re-read from the tail whenever the file moves.
