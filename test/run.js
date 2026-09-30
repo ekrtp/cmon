@@ -551,6 +551,256 @@ is('a path mention outweighs prose', 'beta-tool',
 is('thin evidence produces no tag at all', null,
   projects.focusOf('sess-focus-2', fakeRoot, fixture('f2.jsonl', [userLine('hello there')])));
 
+// ---------------------------------------------------------------- sub-agents
+// A fake ~/.claude/projects inside the temp directory. Nothing here reads the
+// real one: forSession() takes the projects root from the transcript's path.
+console.log('\nsub-agents and workflows');
+const subagents = require('../lib/subagents');
+const side = { isSidechain: true };
+const projRoot = path.join(tmp, 'projects');
+const projA = path.join(projRoot, 'c--ws');
+const projB = path.join(projRoot, 'c--ws-moved');   // where the cwd moved to mid-session
+
+function session(id) {
+  fs.mkdirSync(path.join(projA, id, 'subagents'), { recursive: true });
+  const jsonlPath = path.join(projA, id + '.jsonl');
+  fs.writeFileSync(jsonlPath, userLine('hello') + '\n', 'utf8');
+  return { id, jsonlPath, sub: path.join(projA, id, 'subagents') };
+}
+function write(file, lines) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, lines.join('\n') + '\n', 'utf8');
+  return file;
+}
+function age(file, ms) {
+  const when = new Date(Date.now() - ms);
+  fs.utimesSync(file, when, when);
+}
+const plainMeta = (description, model) =>
+  JSON.stringify({ agentType: 'general-purpose', description, spawnDepth: 1, model });
+const wfMeta = (label, phase) =>
+  JSON.stringify({ agentType: 'workflow-subagent', description: label, workflowPhase: phase, model: 'sonnet' });
+const bash = (id) => assistantLine([{ type: 'tool_use', id, name: 'Bash', input: {} }], 'tool_use', side);
+const finished = () => assistantLine([{ type: 'text', text: 'all done' }], 'end_turn', side);
+const brief = () => JSON.stringify({ type: 'user', isSidechain: true, message: { role: 'user', content: 'your brief' } });
+
+is('a session with no subagents/ directory costs nothing and shows nothing', [0, 0],
+  (() => {
+    const jsonlPath = path.join(projA, 'no-agents-here.jsonl');
+    fs.mkdirSync(projA, { recursive: true });
+    fs.writeFileSync(jsonlPath, userLine('hi') + '\n');
+    const before = subagents._stats.reads;
+    const r = subagents.forSession('no-agents-here', jsonlPath, {});
+    return [r.items.length, subagents._stats.reads - before];
+  })());
+
+const s1 = session('sess-plain');
+write(path.join(s1.sub, 'agent-a1.meta.json'), [plainMeta('Profile the cold path', 'sonnet')]);
+write(path.join(s1.sub, 'agent-a1.jsonl'), [brief(), bash('1')]);
+write(path.join(s1.sub, 'agent-a2.meta.json'), [plainMeta('Read the config', 'haiku')]);
+write(path.join(s1.sub, 'agent-a2.jsonl'), [brief(), finished()]);
+write(path.join(s1.sub, 'agent-a3.meta.json'), [plainMeta('Just spawned', 'sonnet')]);
+write(path.join(s1.sub, 'agent-a4.meta.json'), [plainMeta('Orphaned long ago', 'sonnet')]);
+age(path.join(s1.sub, 'agent-a4.meta.json'), 3600000);
+
+const plain = subagents.forSession(s1.id, s1.jsonlPath, {});
+const byLabel = (r) => Object.fromEntries(r.agents.map((a) => [a.label, a]));
+const pa = byLabel(plain);
+
+is('a sub-agent running a tool reads as running, with the tool as its action',
+  ['running', 'Bash', 'sonnet'],
+  [pa['Profile the cold path'].status, pa['Profile the cold path'].action, pa['Profile the cold path'].model]);
+is('a sub-agent that ended its turn reads as done', 'done', pa['Read the config'].status);
+is('a fresh meta with no transcript yet reads as starting (thinking)', 'thinking', pa['Just spawned'].status);
+is('an old meta with no transcript is neither running nor shown', false, 'Orphaned long ago' in pa);
+is('counts cover every agent, visible or not', { running: 2, total: 4, workflows: 0 }, plain.counts);
+is('open agents come first, finished ones after', 'done', plain.agents[plain.agents.length - 1].status);
+
+is('the stall rule applies to sub-agents too', 'idle',
+  (() => {
+    const r = subagents.forSession(s1.id, s1.jsonlPath,
+      { now: Date.now() + 10 * 60000, idleAfterMs: 120000, lingerMs: 3600000 });
+    return byLabel(r)['Profile the cold path'].status;
+  })());
+
+is('an unchanged directory is not read again', 0,
+  (() => {
+    const before = subagents._stats.reads;
+    subagents.forSession(s1.id, s1.jsonlPath, {});
+    subagents.forSession(s1.id, s1.jsonlPath, {});
+    return subagents._stats.reads - before;
+  })());
+
+is('an appended transcript is read again, and only that one', [1, 'done'],
+  (() => {
+    fs.appendFileSync(path.join(s1.sub, 'agent-a1.jsonl'), finished() + '\n');
+    const before = subagents._stats.reads;
+    const r = subagents.forSession(s1.id, s1.jsonlPath, {});
+    return [subagents._stats.reads - before, byLabel(r)['Profile the cold path'].status];
+  })());
+
+// A workflow run: two agents started, one finished; its script sits under the
+// directory the session's cwd moved to, and there is no <runId>.json yet.
+const s2 = session('sess-flow');
+const run1 = path.join(s2.sub, 'workflows', 'wf_aaaa1111-001');
+const journal1 = write(path.join(run1, 'journal.jsonl'), [
+  JSON.stringify({ type: 'launched' }),
+  JSON.stringify({ type: 'started', key: 'v2:k1', agentId: 'w1', label: 'impl-1', phase: 'Task 1' }),
+  // Never parsed: only the agentId at the front is read, so even a broken
+  // payload counts as a result.
+  '{"type":"result","key":"v2:k1","agentId":"w1","result":{"status":"DONE","notes":"' + 'x'.repeat(40000) + '"',
+  JSON.stringify({ type: 'started', key: 'v2:k2', agentId: 'w2', label: 'review-1', phase: 'Task 1' }),
+]);
+write(path.join(run1, 'agent-w1.meta.json'), [wfMeta('impl-1', 'Task 1')]);
+write(path.join(run1, 'agent-w1.jsonl'), [brief(), finished()]);
+write(path.join(run1, 'agent-w2.meta.json'), [wfMeta('review-1', 'Task 1')]);
+write(path.join(run1, 'agent-w2.jsonl'), [brief(),
+  assistantLine([{ type: 'tool_use', id: '1', name: 'Grep', input: {} }], 'tool_use', side)]);
+write(path.join(projB, s2.id, 'workflows', 'scripts', 'release-checklist-wf_aaaa1111-001.js'), ['export const meta = {}']);
+
+const flow = subagents.forSession(s2.id, s2.jsonlPath, {});
+const wf1 = flow.workflows[0];
+is('a running workflow is named after its script in another project directory',
+  ['release-checklist', 'running', 'running'], wf1 && [wf1.name, wf1.status, wf1.state]);
+is('done/total and the newest phase come from the journal', [1, 2, 'Task 1'],
+  wf1 && [wf1.done, wf1.total, wf1.phase]);
+is('an agent with a result is done; one without reads its own transcript',
+  [['impl-1', 'done'], ['review-1', 'running', 'Grep']],
+  wf1 && wf1.agents.map((a) => (a.status === 'running' ? [a.label, a.status, a.action] : [a.label, a.status])));
+is('workflow agents are not listed again as plain agents', 0, flow.agents.length);
+
+is('the journal is read incrementally: one read for the new lines', [1, 3],
+  (() => {
+    fs.appendFileSync(journal1, JSON.stringify({ type: 'result', key: 'v2:k2', agentId: 'w2', result: {} }) + '\n' +
+      JSON.stringify({ type: 'started', key: 'v2:k3', agentId: 'w3', label: 'fix-1-r1', phase: 'Task 1' }) + '\n');
+    write(path.join(run1, 'agent-w3.meta.json'), [wfMeta('fix-1-r1', 'Task 1')]);
+    const before = subagents._stats.reads;
+    const r = subagents.forSession(s2.id, s2.jsonlPath, {});
+    // the journal once, plus the new agent's meta; the finished ones are cached
+    return [subagents._stats.reads - before - 1, r.workflows[0].total];
+  })());
+
+is('a half-written journal line waits for the rest', 3,
+  (() => {
+    fs.appendFileSync(journal1, '{"type":"started","key":"v2:k4","agentId":"w4","lab');
+    return subagents.forSession(s2.id, s2.jsonlPath, {}).workflows[0].total;
+  })());
+
+is('...and is picked up once it is complete', 4,
+  (() => {
+    fs.appendFileSync(journal1, 'el":"review-2","phase":"Task 2"}\n');
+    return subagents.forSession(s2.id, s2.jsonlPath, {}).workflows[0].total;
+  })());
+
+is('an unknown journal line type does not break the run', 4,
+  (() => {
+    fs.appendFileSync(journal1, JSON.stringify({ type: 'something-new', payload: [1, 2] }) + '\n');
+    return subagents.forSession(s2.id, s2.jsonlPath, {}).workflows[0].total;
+  })());
+
+// A finished run: <runId>.json names it and says how it ended.
+const run2 = path.join(s2.sub, 'workflows', 'wf_bbbb2222-002');
+write(path.join(run2, 'journal.jsonl'), [
+  JSON.stringify({ type: 'launched' }),
+  JSON.stringify({ type: 'started', key: 'v2:q', agentId: 'q1', label: 'research', phase: 'Research' }),
+  JSON.stringify({ type: 'result', key: 'v2:q', agentId: 'q1', result: {} }),
+]);
+const endedAt = Date.now() - 60000;
+write(path.join(projA, s2.id, 'workflows', 'wf_bbbb2222-002.json'), [JSON.stringify({
+  runId: 'wf_bbbb2222-002', workflowName: 'nightly-audit', status: 'completed', agentCount: 1,
+  startTime: endedAt - 300000, durationMs: 300000, phases: [],
+})]);
+
+is('a finished run takes its name and status from <runId>.json', ['nightly-audit', 'completed', 'done'],
+  (() => {
+    const w = subagents.forSession(s2.id, s2.jsonlPath, {}).workflows.find((x) => x.runId === 'wf_bbbb2222-002');
+    return w && [w.name, w.status, w.state];
+  })());
+
+is('a running workflow sorts above a finished one', 'wf_aaaa1111-001',
+  subagents.forSession(s2.id, s2.jsonlPath, {}).workflows[0].runId);
+
+is('a finished run older than the linger window is hidden, but still counted', [1, 5],
+  (() => {
+    const r = subagents.forSession(s2.id, s2.jsonlPath, { lingerMs: 30000 });
+    return [r.workflows.length, r.counts.total];
+  })());
+
+is('inside a workflow: every open agent, at most two finished', [1, 2],
+  (() => {
+    const w = subagents.forSession(s2.id, s2.jsonlPath, {}).workflows[0];
+    const open = w.agents.filter((a) => a.status === 'running' || a.status === 'thinking');
+    return [open.length, w.agents.length - open.length];
+  })());
+
+const s3 = session('sess-many');
+for (let i = 0; i < 12; i++) {
+  write(path.join(s3.sub, `agent-m${i}.meta.json`), [plainMeta(`worker ${i}`, 'sonnet')]);
+  write(path.join(s3.sub, `agent-m${i}.jsonl`), [brief(), bash(String(i))]);
+}
+is('maxLines caps the tree and reports what it cut', [4, 8],
+  (() => {
+    const r = subagents.forSession(s3.id, s3.jsonlPath, { maxLines: 5 });
+    return [r.items.length, r.overflow];
+  })());
+
+is('a sub-agent transcript is decided by its own sidechain lines', ['running', 'Bash'],
+  (() => {
+    const r = statusLib.derive(fixture('sc1.jsonl', [brief(), bash('1')]), { sidechain: true, now: Date.now() });
+    return [r.status, r.action];
+  })());
+
+is('a tool_result that ends the turn reads as done (StructuredOutput)', 'done',
+  statusLib.derive(fixture('sc2.jsonl', [
+    assistantLine([{ type: 'tool_use', id: '1', name: 'StructuredOutput', input: {} }], 'tool_use', side),
+    JSON.stringify({ type: 'user', isSidechain: true, toolEndsTurn: true,
+      message: { content: [{ type: 'tool_result', tool_use_id: '1', content: 'ok' }] } }),
+  ]), { sidechain: true, now: Date.now() }).status);
+
+is('a thinking block with no stop_reason yet is still generating', 'thinking',
+  statusLib.derive(fixture('sc3.jsonl', [
+    brief(),
+    JSON.stringify({ type: 'assistant', isSidechain: true,
+      message: { content: [{ type: 'thinking', thinking: '...' }], stop_reason: null } }),
+  ]), { sidechain: true, now: Date.now() }).status);
+
+is('the agent tree is on by default and can be turned off', [true, false],
+  [configLib.sanitise({}).showAgents, configLib.sanitise({ showAgents: false }).showAgents]);
+is('agentLines and agentLingerMs fall back when absurd', [8, 600000],
+  [configLib.sanitise({ agentLines: 0 }).agentLines, configLib.sanitise({ agentLingerMs: -5 }).agentLingerMs]);
+
+// ---------------------------------------------------------------- render
+// The real renderer on fabricated sessions, at two widths and every grouping.
+console.log('\nrender (demo)');
+const { execFileSync } = require('child_process');
+const MONITOR = path.join(__dirname, '..', 'monitor.js');
+const board = (cols, extra) => execFileSync(process.execPath, [MONITOR, '--demo', '--once', ...(extra || [])], {
+  encoding: 'utf8',
+  env: { ...process.env, COLUMNS: String(cols), NO_COLOR: '' },
+}).replace(/\x1b\[[0-9;]*m/g, '');
+const widest = (out) => Math.max(...out.split('\n').map((l) => text.width(l)));
+
+for (const cols of [120, 70]) {
+  const out = board(cols);
+  is(`at ${cols} columns the tree is drawn with its connectors`, true,
+    out.includes('├─ ') && out.includes('└─ ') && out.includes('release-checklist'));
+  is(`at ${cols} columns no line is wider than the terminal`, true, widest(out) <= cols);
+}
+is('every grouping keeps the tree inside the width', true,
+  ['status', 'focus', 'project', 'none'].every((g) => {
+    const out = board(90, [`--group=${g}`]);
+    return out.includes('└─ ') && widest(out) <= 90;
+  }));
+is('--no-agents hides the tree', false, board(120, ['--no-agents']).includes('├─ '));
+is('a session whose workflow is still running says so', true, board(160).includes('wf running'));
+
+is('clipAnsi cuts a coloured line without breaking an escape', [5, true],
+  (() => {
+    const s = text.clipAnsi('\x1b[31mabcdefghij\x1b[0m', 5);
+    return [text.width(s), s.endsWith('\x1b[0m')];
+  })());
+is('clipAnsi leaves plain text plain', 'abcd…', text.clipAnsi('abcdefghij', 5));
+
 // ---------------------------------------------------------------- platform
 console.log('\nplatform');
 is('own pid is alive', true, isAlive(process.pid));

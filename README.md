@@ -10,7 +10,7 @@ transcript · what each one is costing you · and which project it is really abo
 [![Node](https://img.shields.io/badge/node-%E2%89%A518-3c873a)](https://nodejs.org)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-2ea043)](package.json)
 [![Platform](https://img.shields.io/badge/platform-Windows-0078d4)](lib/platform/win32.js)
-[![Tests](https://img.shields.io/badge/tests-87%20passing-2ea043)](test/run.js)
+[![Tests](https://img.shields.io/badge/tests-138%20passing-2ea043)](test/run.js)
 [![Themes](https://img.shields.io/badge/themes-17-d7875f)](lib/themes.js)
 [![License](https://img.shields.io/badge/license-see%20notes-lightgrey)](#licensing)
 
@@ -50,10 +50,11 @@ a chat to find out what it is doing.
 | 💸 **What it has cost** | Per session, from the token counters and the current price list. |
 | 🏷 **Which project it is about** | Every VS Code chat shares one `cwd`; the `focus` tag is worked out from the conversation instead. Same project = same colour and glyph, always. |
 | 🧭 **What it is doing right now** | The tool it is running, plan progress (`3/7`), the task in flight, anything you left queued. |
+| 🌳 **What its sub-agents are doing** | Every sub-agent and workflow run, as a tree under its session: each agent's own status, tool and age, and a workflow's phase and `done/total`. The IDE extension has no `/workflows`; this is the view it lacks. |
 
 It watches; it never drives. No hooks, nothing written into Claude Code's own
-directories, `settings.json` untouched. Two keys: `t` for themes, `g` for
-grouping.
+directories, `settings.json` untouched. Three keys: `t` for themes, `g` for
+grouping, `a` to show or hide the agent tree.
 
 ---
 
@@ -129,11 +130,46 @@ theme turns colour off entirely — the glyphs still carry every distinction.
 | `--` | **idle** | grey | nothing recent, or a "running" tool older than `idleAfterMs` |
 
 Rows are grouped by status by default, most demanding first. Sub-agent turns
-(`isSidechain`) never decide a session's own status. Only the two live states
+(`isSidechain`) never decide a session's own status — they get rows of their
+own, below. Only the two live states
 animate, and the animation repaints the last snapshot rather than re-reading
 anything from disk.
 
 ---
+
+## Sub-agents and workflows
+
+A session's sub-agents and workflow runs hang under it as a tree, indented
+beneath the title, sharing the session's zebra band so the block reads as one:
+
+```
+  >> running     Cache warmup takes 40s on cold start       opus-5   96k/200k   1s
+  >> running     ├─ Profile the cold start path · Bash · sonnet                 1s
+  .. thinking    ├─ Compare cache libraries · sonnet                            6s
+                 └─ +1 more
+  OK done        Migrate the auth tables      wf running    opus-5   174k/200k  34m
+  >> running     └─ wf release-checklist · Task 2 · 3/4                         3s
+  OK done           ├─ fix-1-r1 · sonnet                                        9m
+  >> running        └─ impl-2 · Edit · sonnet                                   3s
+```
+
+- **Each child has its own status**, read from its own transcript with the same
+  rules as a session (`running`, `thinking`, `asking`, `done`, `idle`) and the
+  same stall rule, so a dead agent does not spin forever. A sub-agent that was
+  spawned but has written nothing yet reads as `thinking`.
+- **A workflow line** names the run (from its script, or from the summary it
+  writes when it ends), its newest phase and `done/total`. Inside it: every
+  agent still working, plus the two that finished last.
+- **What stays on screen:** everything that is working, plus whatever finished
+  in the last 10 minutes (`agentLingerMs`). At most 8 lines per session
+  (`agentLines`); the rest is summed up as `+N more`.
+- **A session that launched a workflow** usually ends its own turn and reads
+  `done` while the workflow runs on. Its ACTION cell then says `wf running`, so
+  it does not look finished — even with the tree hidden.
+- The AGENTS column (`running/total`) now counts from the same files, and falls
+  back to the dashboard database only when there are none.
+
+`a` toggles the tree and keeps the choice; `--no-agents` hides it for one run.
 
 ## Where the title comes from
 
@@ -189,7 +225,7 @@ keeps the distinction when colour is off.
 | `cost` | money spent by this session | `token_usage` × `model_pricing` |
 | `tokens` | all tokens including cache reads | dashboard.db |
 | `tasks` | plan progress `3/7`, plus the task in flight after `▸` | `~/.claude/tasks/<session>/*.json` |
-| `agents` | running / total sub-agents | dashboard.db |
+| `agents` | running / total sub-agents, workflow agents included | `<session>/subagents/`, else dashboard.db |
 | `effort`, `mode` | reasoning effort · permission mode | transcript |
 
 Alternate rows carry a faint background band (`zebra`, `zebraStrength`), which is
@@ -214,9 +250,10 @@ narrow terminal columns drop in a fixed order — `model`, `effort`, `ctx` and
 | `--theme=nord` · `--themes` | pick a theme · preview them all |
 | `--columns=status,title,cost,time` | choose your columns |
 | `--compact` · `--no-animation` · `--wide` | tighter rows · still glyphs · full session id |
+| `--no-agents` | hide the sub-agent and workflow tree (`a` brings it back) |
 | `--demo` | fabricated sessions (screenshots, testing) |
 | `--version` · `--help` | version · the usage block above |
-| `npm test` | 81 fixture assertions, no network, no deps |
+| `npm test` | 138 fixture assertions, no network, no deps |
 | `npm run config` | show or edit the config |
 | `npm run probe` | re-measure every file format this depends on |
 | `npm run screenshot` | regenerate the README images from `--demo` |
@@ -256,7 +293,10 @@ touch the config of a board you have open.
   "wide": false,
   "idleAfterMs": 120000,
   "contextLimit": 200000,
-  "notifications": false
+  "notifications": false,
+  "showAgents": true,
+  "agentLingerMs": 600000,
+  "agentLines": 8
 }
 ```
 
@@ -288,14 +328,18 @@ and it backs up `settings.json` first.
 |---|---|---|
 | `~/.claude/sessions/<PID>.json` | which sessions exist | read only |
 | `~/.claude/projects/<enc>/<id>.jsonl` | title, status, model, context, focus, queue | read only, windowed |
-| `~/.claude/agent-dashboard/dashboard.db` | curated names, cost, sub-agents | read only, optional |
+| `~/.claude/projects/<enc>/<id>/subagents/` | sub-agents, workflow runs and their journals | read only, windowed |
+| `~/.claude/projects/*/<id>/workflows/` | a workflow's name (its script) and how it ended (`<runId>.json`) | read only |
+| `~/.claude/agent-dashboard/dashboard.db` | curated names, cost, sub-agent counts (fallback) | read only, optional |
 | `~/.claude/tasks/<session>/*.json` | plan progress | read only |
 | `<workspace>/CLAUDE.md` | the project list for `focus` | read only |
 | `~/.claude/monitor/config.json` | configuration | read + created once |
 
 Transcripts are never loaded whole: 64 KB from the tail for the title and the
 status, 128 KB from the head for the first prompt, 32 KB + 192 KB for the focus
-scan — all cached per file mtime. Only the head read is cached hard: a
+scan, 32 KB from the tail of each sub-agent transcript — all cached per file
+mtime. A workflow journal is read incrementally, new bytes only, and its result
+lines (up to 35 KB each) are never parsed. Only the head read is cached hard: a
 transcript's first prompt cannot change, whereas both `custom-title` and
 `ai-title` do, so they are re-read from the tail whenever the file moves.
 Measured over 10 live sessions, four runs each: **68–81 ms cold, 11–16 ms warm**

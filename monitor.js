@@ -11,7 +11,8 @@
 //   title   <- dashboard.db sessions.name, else the transcript's ai-title
 //   status  <- transcript: stop_reason / tool_use / interrupt markers
 //   extras  <- model, effort, context, branch, queue depth (same read)
-//              cost and sub-agents (dashboard.db), plan progress (~/.claude/tasks)
+//              cost (dashboard.db), plan progress (~/.claude/tasks)
+//   tree    <- sub-agents and workflow runs, from <session>/subagents/ (lib/subagents.js)
 //   focus   <- which project the conversation is actually about (lib/projects.js)
 //
 // Usage:  cmon [options]        (or `node monitor.js` if the command is not installed)
@@ -26,10 +27,11 @@
 //   --compact              tighter rows
 //   --no-animation         hold the status glyphs still
 //   --wide                 full session id
+//   --no-agents            hide the sub-agent and workflow tree under each session
 //   --no-input             ignore the keyboard
 //   --demo                 fabricated sessions (screenshots, testing)
 //   --version  --help
-// Keys: t theme picker · g grouping · Ctrl+C exit
+// Keys: t theme picker · g grouping · a agent tree on/off · Ctrl+C exit
 // Environment: NO_COLOR=1 disables colour.
 //
 // Config: ~/.claude/monitor/config.json — hot-reloaded, no restart needed.
@@ -47,6 +49,7 @@ const projects = require('./lib/projects');
 const notify = require('./lib/notify');
 const identity = require('./lib/identity');
 const demo = require('./lib/demo');
+const subagents = require('./lib/subagents');
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes('--' + name);
@@ -76,6 +79,8 @@ const ALL = flag('all');
 // --demo renders fabricated sessions. The README screenshots come from here,
 // never from a live machine.
 const DEMO = flag('demo');
+// --no-agents holds for this run until `a` is pressed, which then decides.
+let noAgentsFlag = flag('no-agents');
 
 // --themes prints a coloured sample of every theme, so you can pick one by
 // looking instead of by name.
@@ -122,6 +127,7 @@ function applyOverrides(base) {
   if (flag('no-animation')) c.animationMs = 0;
   if (flag('wide')) c.wide = true;
   if (flag('flat')) c.groupBy = 'none';
+  if (noAgentsFlag) c.showAgents = false;
   if (ALL) { c.showEmpty = true; c.windowMs = 0; }
   return configLib.sanitise(c);
 }
@@ -207,6 +213,17 @@ function cycleGrouping() {
   active = applyOverrides({ ...cfg, groupBy: next, theme: active.theme });
 }
 
+// `a` shows or hides the sub-agent tree, and keeps the choice like `g` does.
+function toggleAgents() {
+  const next = !active.showAgents;
+  noAgentsFlag = false;
+  try {
+    configLib.set('showAgents', next);
+    cfg = configLib.load();
+  } catch (e) { /* keep going with the in-memory value */ }
+  active = applyOverrides({ ...cfg, showAgents: next, theme: active.theme });
+}
+
 function closePicker(keep) {
   const list = themes.names();
   if (keep) {
@@ -249,7 +266,7 @@ function pickerBar(total) {
 }
 
 // --- text layout (lib/text.js: measurement, clipping, wrapping) ------------
-const { width, clip, pad, wrap, ago, compactNumber, ANSI } = require('./lib/text');
+const { width, clip, clipAnsi, pad, wrap, ago, compactNumber, ANSI } = require('./lib/text');
 
 const shortModel = (m) => String(m || '').replace(/^claude-/, '').replace(/-\d{8}$/, '');
 
@@ -271,6 +288,9 @@ function collect() {
     const plan = tasksLib.progress(s.sessionId);
     const focus = projects.focusOf(s.sessionId, s.cwd, t.jsonl);
     const lastEvent = Math.max(st.lastEventMs || 0, t.mtimeMs || 0, (hook && hook.when) || 0);
+    const tree = subagents.forSession(s.sessionId, t.jsonl, {
+      idleAfterMs: active.idleAfterMs, lingerMs: active.agentLingerMs, maxLines: active.agentLines,
+    });
 
     return {
       sessionId: s.sessionId,
@@ -290,6 +310,7 @@ function collect() {
       cost: money ? money.cost : null,
       tokens: money ? money.tokens : null,
       agents,
+      tree,
       plan,
       focus,
       src: s.entrypoint === 'cli' ? 'cli' : (s.entrypoint === 'claude-vscode' ? 'vsc' : (s.entrypoint || '?').slice(0, 3)),
@@ -434,7 +455,7 @@ function cell(row, col) {
       const mark = identity.glyphFor(row.focus.name, active.glyphs);
       return `${mark} ${row.focus.name}${row.focus.confident ? '' : ' ?'}`;
     }
-    case 'action': return row.action || '—';
+    case 'action': return backgroundWork(row) || row.action || '—';
     case 'model': return row.model || '—';
     case 'branch': return row.branch || '—';
     case 'src': return `[${row.src}]`;
@@ -447,11 +468,36 @@ function cell(row, col) {
     case 'cost': return row.cost == null ? '—' : '$' + row.cost.toFixed(2);
     case 'tokens': return row.tokens == null ? '—' : compactNumber(row.tokens);
     case 'tasks': return row.plan ? `${row.plan.completed}/${row.plan.total}` : '—';
-    case 'agents': return row.agents && row.agents.total ? `${row.agents.running}/${row.agents.total}` : '—';
+    case 'agents': {
+      // The files on disk are live; dashboard.db only as fresh as its writer.
+      const a = row.tree && row.tree.counts.total ? row.tree.counts : row.agents;
+      return a && a.total ? `${a.running}/${a.total}` : '—';
+    }
     case 'effort': return row.effort || '—';
     case 'mode': return row.permissionMode || '—';
     default: return '';
   }
+}
+
+// The tree under a session. Box-drawing is chrome, like the '─' rules the board
+// already draws in both glyph sets, so it does not change with `glyphs`; the
+// workflow mark is a glyph and does. '⚙' is left out on purpose: it has no
+// fixed cell width (one cell as text, two as emoji), which shifts every column
+// after it.
+const TREE = { mid: '├─ ', last: '└─ ', pipe: '│  ', blank: '   ' };
+const WF_MARK = () => (active.glyphs === 'emoji' ? '🧩' : 'wf');
+// Columns a child line fills in; the title span runs up to the next of these.
+const CHILD_COLUMNS = ['status', 'time'];
+// Agent types too common to be worth a word on every line.
+const GENERIC_AGENT = ['general-purpose', 'workflow-subagent', ''];
+
+// A session that launched a workflow ends its own turn and reads "done" while
+// the workflow is still working. The idle ACTION cell says so, or the row
+// looks finished — and it still does when the tree is switched off.
+function backgroundWork(row) {
+  const tc = row.tree && row.tree.counts;
+  if (!tc || !tc.running || (row.status !== 'done' && row.status !== 'idle')) return '';
+  return tc.workflows ? `${WF_MARK()} running` : `${tc.running} agent${tc.running === 1 ? '' : 's'}`;
 }
 
 // Group heading order: the statuses that want you come first, matching the row
@@ -524,6 +570,84 @@ function render(snapshot) {
   // so they wrap down instead. Everything else stays on the first line.
   const WRAPPABLE = ['title', 'focus'];
 
+  // --- the sub-agent tree, under the TITLE column --------------------------
+  // A child line reuses the parent's columns: STATUS carries the child's own
+  // glyph and status, AGE its age, and the title span its connector and label.
+  // That span runs on through any columns a child leaves blank, so a label is
+  // only cut when the whole line runs out.
+  const titleAt = cols.indexOf('title');
+  let spanEnd = titleAt + 1;
+  while (spanEnd < cols.length && !CHILD_COLUMNS.includes(cols[spanEnd])) spanEnd++;
+  const titleSpan = cols.slice(titleAt, spanEnd).reduce((sum, c, i) => sum + w[c] + (i ? gap : 0), 0);
+
+  // [text, colour] pieces laid into exactly `max` cells, clipped in plain text
+  // so an escape is never cut in half.
+  const fit = (parts, max) => {
+    let used = 0;
+    let s = '';
+    for (const [text, code] of parts) {
+      if (!text || used >= max) continue;
+      const t = clip(text, max - used);
+      s += (code || '') + t + (code ? RESET : '');
+      used += width(t);
+      if (t !== text) break;
+    }
+    return s + ' '.repeat(Math.max(0, max - used));
+  };
+
+  const agentEntry = (a, prefix) => {
+    const detail = [a.action, a.model, GENERIC_AGENT.includes(a.type) ? '' : a.type].filter(Boolean).join(' · ');
+    return { prefix, status: a.status, statusText: a.status, label: a.label, detail, age: a.lastEventMs };
+  };
+
+  const treeLines = (row) => {
+    const tree = row.tree;
+    if (!active.showAgents || !tree || !tree.items || !tree.items.length) return [];
+    const T = TREE;
+    const top = tree.items.length + (tree.overflow ? 1 : 0);
+    const entries = [];
+    tree.items.forEach((it, i) => {
+      const lastTop = i === top - 1;
+      const lead = lastTop ? T.last : T.mid;
+      if (it.kind !== 'workflow') { entries.push(agentEntry(it.node, lead)); return; }
+      const wf = it.node;
+      entries.push({
+        prefix: lead,
+        status: wf.state,
+        statusText: wf.state === 'interrupted' ? wf.status : wf.state,
+        label: `${WF_MARK()} ${wf.name}`,
+        detail: [wf.phase, `${wf.done}/${wf.total}`].filter(Boolean).join(' · '),
+        age: wf.lastEventMs,
+      });
+      wf.agents.forEach((a, k) => entries.push(agentEntry(a,
+        (lastTop ? T.blank : T.pipe) + (k === wf.agents.length - 1 ? T.last : T.mid))));
+    });
+    if (tree.overflow) entries.push({ prefix: T.last, more: tree.overflow });
+
+    return entries.map((e) => {
+      const needsYou = e.status === 'asking' || e.status === 'interrupted';
+      const parts = e.more
+        ? [[e.prefix, paint('border')], [`+${e.more} more`, paint('dim')]]
+        : [[e.prefix, paint('border')],
+          [e.label, needsYou ? BOLD + (paint(e.status) || '') : ''],
+          [e.detail ? ' · ' + e.detail : '', paint('dim')]];
+      const segs = [];
+      for (let i = 0; i < cols.length; i++) {
+        const c = cols[i];
+        if (i === titleAt) { segs.push(fit(parts, titleSpan)); i = spanEnd - 1; continue; }
+        if (c === 'status' && !e.more) {
+          const colour = paint(e.status) || paint('idle');
+          segs.push(colour + (needsYou ? BOLD : '') + pad(`${glyph(e.status)} ${e.statusText}`, w.status) + RESET);
+        } else if (c === 'time' && !e.more) {
+          segs.push(paint('dim') + pad(ago(e.age), w.time) + RESET);
+        } else {
+          segs.push(' '.repeat(w[c]));
+        }
+      }
+      return segs.join(sep);
+    });
+  };
+
   const lines = (row, lead, striped) => {
     const stripe = striped ? stripeCode() : '';
     const colour = paint(row.status) || paint('idle');
@@ -552,11 +676,22 @@ function render(snapshot) {
     if (row.queued) extras.push(`${colour}+${row.queued} queued${RESET}`);
     if (row.plan && row.plan.current) extras.push(`${paint('dim')}▸ ${clip(row.plan.current, 30)}${RESET}`);
 
-    const out = ['  ' + lead + renderLine(0) + (extras.length ? sep + extras.join(' ') : '')];
+    // Extras go after the last column, one at a time, as long as each fits
+    // whole: half a "+1 queued" says nothing.
+    let first = '  ' + lead + renderLine(0);
+    let joiner = sep;
+    for (const x of extras) {
+      if (width(first + joiner + x) > total) break;
+      first += joiner + x;
+      joiner = ' ';
+    }
+    const out = [first];
     for (let i = 1; i < height; i++) out.push('  ' + lead + renderLine(i));
-    // The band covers EVERY line of the row, which is what makes a wrapped title
-    // read as one session instead of two.
-    return out.map((l) => applyStripe(l, stripe, total));
+    for (const l of treeLines(row)) out.push('  ' + lead + l);
+    // The band covers EVERY line of the row — wrapped title and tree included —
+    // which is what makes the block read as one session instead of several.
+    // Nothing may run past the edge: an overlong line wraps and shears the table.
+    return out.map((l) => applyStripe(clipAnsi(l, total), stripe, total));
   };
 
   // The stripe alternates across the WHOLE table, not within each group: with
@@ -599,11 +734,13 @@ function render(snapshot) {
       out.push(pickerBar(total));
     } else {
       out.push(`  ${paint('dim')}watching · ${active.refreshMs / 1000}s refresh · grouped by ${active.groupBy}` +
-        ` · t theme · Ctrl+C to exit` +
+        ` · t theme · g group · a agents ${active.showAgents ? 'on' : 'off'} · Ctrl+C to exit` +
         `${picker.saved ? ` · saved theme ${picker.saved}` : ''}${RESET}`);
     }
   }
-  return out.join('\n');
+  // Header and footer too: a line wider than the terminal wraps and shears the
+  // table. (The footer names the dropped columns, which gets long when narrow.)
+  return out.map((l) => clipAnsi(l, total)).join('\n');
 }
 
 // Flicker-free: home the cursor and clear to end of line rather than wiping the
@@ -672,8 +809,9 @@ if (ONCE) {
     paintFrame(snapshot);
   });
 
-  // The board listens for exactly one key: `t`, which opens the theme picker.
-  // There is no row navigation — this is a display, not a console.
+  // The board listens for three keys: `t` opens the theme picker, `g` cycles the
+  // grouping, `a` shows or hides the agent tree. There is no row navigation —
+  // this is a display, not a console.
   const keyboard = process.stdin.isTTY && !flag('no-input');
 
   const quit = () => {
@@ -701,6 +839,7 @@ if (ONCE) {
       if (!picker.open) {
         if (key === 't') { openPicker(); paintFrame(snapshot); }
         else if (key === 'g') { cycleGrouping(); paintFrame(snapshot); }
+        else if (key === 'a') { toggleAgents(); paintFrame(snapshot); }
         else if (key === 'q') quit();
         return;
       }

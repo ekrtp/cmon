@@ -4,6 +4,45 @@ This fork's history, newest first. Upstream
 ([ibrahimokdadov/claudeMonitor](https://github.com/ibrahimokdadov/claudeMonitor))
 is the two commits at the bottom.
 
+## 1.1.0
+
+- **Sub-agents and workflow runs, as a tree under each session.** `/workflows`
+  only works in the terminal that started the run, so from the IDE extension
+  there was no way to see which workflow agent was doing what. Everything
+  needed is already on disk next to the transcript (`lib/subagents.js`):
+  - `subagents/agent-<id>.jsonl` + `.meta.json` for Agent-tool sub-agents,
+    `subagents/workflows/<runId>/journal.jsonl` plus one transcript per agent
+    for a workflow run, and — searched across every project directory, because
+    a session's cwd can move — `workflows/scripts/<name>-<runId>.js` (the run's
+    name while it runs) and `workflows/<runId>.json` (written when it ends).
+  - Each child gets its own status from its own transcript, with the session
+    rules and the same stall rule. `status.derive()` takes `{ sidechain: true }`
+    for this: every line of a sub-agent transcript is `isSidechain`, which the
+    session derivation skips by design.
+  - A workflow line shows its name, newest phase and `done/total`; inside it,
+    every open agent plus the two that finished last. Finished nodes stay for
+    `agentLingerMs` (10 min); at most `agentLines` (8) lines per session, the
+    rest summed as `+N more`.
+  - A session that reads `done` while its workflow runs on says `wf running` in
+    its ACTION cell.
+  - `a` toggles the tree and keeps the choice, `--no-agents` hides it for a run,
+    `showAgents` in the config. The AGENTS column counts from the same files.
+  - Cost, measured over 8 live sessions carrying 95 sub-agents: 125 ms on the
+    first frame, 5–7 ms per refresh after it. Every file is cached on
+    (mtime, size), a finished agent is cached for good, a journal is read
+    incrementally, and its result lines (up to 35 KB) are never parsed. One
+    tool result can outgrow the 32 KB tail (measured: 316 KB lines, in 6 of 148
+    agent transcripts), so that window widens only when it holds no whole line.
+- `status.derive()`: a tool result carrying `toolEndsTurn: true` ends the turn
+  (`done`) — how a workflow agent finishes, on its `StructuredOutput` call.
+- **Fixed: lines wider than the terminal.** Whatever followed the last column
+  (`+1 queued`, the plan step) and the footer on a narrow screen ran past the
+  edge and wrapped, shearing the table. Every line is now clipped to the width,
+  and an extra is shown only when it fits whole.
+- README screenshots regenerated from `--demo`, which now has sub-agents and a
+  running workflow (`release-checklist`). The social-preview PNG is unchanged:
+  it needs a browser render.
+
 ## 1.0.1
 
 - **Fixed: renaming a session in the IDE did not change the title.** The rename
