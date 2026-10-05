@@ -133,7 +133,11 @@ function applyOverrides(base) {
   if (flag('flat')) c.groupBy = 'none';
   if (noAgentsFlag) c.showAgents = false;
   if (ALL) { c.showEmpty = true; c.windowMs = 0; }
-  return configLib.sanitise(c);
+  const out = configLib.sanitise(c);
+  // The page shows every open tab; sessions quiet for longer than the window go
+  // to their own lane there instead of disappearing.
+  if (flag('web')) { out.quietAfterMs = out.windowMs; out.windowMs = 0; }
+  return out;
 }
 
 let active = applyOverrides(cfg);
@@ -856,14 +860,23 @@ function paintFrame(snapshot) {
 // `--web` serves the board as a local page instead of painting the terminal.
 const hex = (rgb) => '#' + rgb.map((v) => v.toString(16).padStart(2, '0')).join('');
 
-function webState(snapshot, events) {
+// Every theme goes to the page once per snapshot (17 × 11 colours), so the page
+// can switch themes on its own without touching config.json.
+const allThemes = () => themes.names().map((name) => {
+  const colours = themes.resolve(name).colours;
+  return { name, colours, light: identity.luminance(themes.hexToRgb(colours.header)) < 0.5 };
+});
+
+function webState(snapshot, events, closed) {
   const light = themeIsLight();
   const rows = snapshot.rows.map((r) => {
     const { jsonl, tree, ...rest } = r;
     const nodes = (tree && (tree.all || tree.items)) || [];
     return {
       ...rest,
-      focusColour: r.focus ? hex(identity.colourFor(r.focus.name, { light })) : null,
+      // Both, so a theme picked in the page keeps readable project colours.
+      focusColour: r.focus ? hex(identity.colourFor(r.focus.name, { light: false })) : null,
+      focusColourLight: r.focus ? hex(identity.colourFor(r.focus.name, { light: true })) : null,
       contextLimit: r.contextTokens ? contextLimit(r.contextTokens) : null,
       workflows: nodes.filter((it) => it.kind === 'workflow').map((it) => ({
         ...it.node, cost: DEMO ? (it.node.cost || 0) : costLib.forRun(jsonl, r.sessionId, it.node.runId),
@@ -874,7 +887,10 @@ function webState(snapshot, events) {
   });
   return {
     theme: { name: active.theme, colours: theme.colours, light },
+    themes: allThemes(),
     rows,
+    closed: (closed || []).map(({ jsonl, ...c }) => c),
+    quietAfterMs: active.quietAfterMs || 0,
     hiddenEmpty: snapshot.hiddenEmpty,
     hiddenStale: snapshot.hiddenStale,
     timeline: events,
@@ -885,21 +901,32 @@ function webState(snapshot, events) {
 if (flag('web')) {
   const web = require('./lib/web');
   const timeline = require('./lib/timeline');
+  const recentLib = require('./lib/recent');
   const port = Number(value('port')) || 4280;
   const runCost = (row, runId) => costLib.forRun(row.jsonl, row.sessionId, runId);
   const tick = () => {
     const snapshot = collect();
     notify.forget(new Set(snapshot.rows.map((r) => r.sessionId)));
     notify.check(snapshot.rows, active.notifications);
-    const events = DEMO ? demo.timeline() : timeline.observe(snapshot.rows, { runCost });
-    server.publish(webState(snapshot, events));
+    let closed = [];
+    if (DEMO) {
+      closed = demo.closed();
+    } else {
+      for (const r of snapshot.rows) r.recent = recentLib.info(r.jsonl);
+      closed = recentLib.closed(new Set(registry.liveSessions().map((s) => s.sessionId)));
+      for (const c of closed) c.recent = { replyAt: c.lastEvent };
+    }
+    const events = DEMO ? demo.timeline() : timeline.observe([...snapshot.rows, ...closed], { runCost });
+    server.publish(webState(snapshot, events, closed));
   };
+  let timer = null;
   const server = web.start(port, (url) => {
     console.log(`cmon --web  ${url}`);
     console.log('Open it in VS Code: Ctrl+Shift+P > "Simple Browser: Show" and paste the address. Ctrl+C stops.');
+    // Listen first: the first cost pass reads every transcript (seconds), and the
+    // page should already be showing "loading" meanwhile.
+    setImmediate(() => { tick(); timer = setInterval(tick, active.refreshMs); });
   });
-  tick();
-  let timer = setInterval(tick, active.refreshMs);
   configLib.watch((next) => {
     cfg = next;
     active = applyOverrides(cfg);

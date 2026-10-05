@@ -62,12 +62,22 @@ grouping, `a` to show or hide the agent tree.
 cmon --web               # http://127.0.0.1:4280/  (--port=… to change)
 ```
 
-The same data as a page: sessions in three lanes (waiting on you · working ·
-finished), each card with its context bar, cost, workflow progress bars and plan
-progress; click a card for its task list, every sub-agent and workflow agent, and
-the session id to copy. A **Today** column lists what finished — sessions,
-workflows (with agent count, duration and cost), tasks and sub-agents — kept in
-`~/.claude/monitor/timeline/<date>.jsonl` so a restart keeps the day.
+The same data as a page:
+
+- **Lanes**: waiting on you · working · finished. A session whose own turn is
+  over while its sub-agents or a workflow still run counts as working, and its
+  card lists the live agents with their current tool.
+- **Cards** stay short: status, title, one line of what it is doing or last said,
+  context and cost, plus anything still moving (workflow bars, live agents, an
+  unfinished plan). Click one for your last message, the last eight tool calls,
+  the task list, every agent, branch and start time.
+- **Open, untouched for over `window`**: tabs still open but quiet, one line each.
+- **Closed recently**: sessions active in the last 3 days that no window holds
+  any more, with a *Copy resume* button (`cd "<cwd>"; claude --resume <id>`).
+- **Today**: sessions, workflows (agents, duration, cost), tasks and sub-agents as
+  they finish; workflows and turns that ended before cmon started are backfilled
+  from Claude Code's own records. Kept in `~/.claude/monitor/timeline/<date>.jsonl`.
+- **Theme menu**: any of the 17 themes for this page only (stored in the browser).
 
 Open it in VS Code's Simple Browser (`Ctrl+Shift+P` → *Simple Browser: Show*) to
 keep it next to your chats without another window. It binds to 127.0.0.1 only,

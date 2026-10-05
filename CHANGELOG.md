@@ -21,6 +21,14 @@ is the two commits at the bottom.
   agents included, read incrementally (first pass over 13 sessions ~6 s, then
   ~30 ms).
 - `lib/tasks.js` returns the task list itself, not only the counts.
+- **What it said and did** (`lib/recent.js`): last prompt, last reply and the last
+  eight tool calls per session, from the transcript tail.
+- **Closed recently**: transcripts touched in the last 3 days with no live
+  session, with a resume line to copy. Plugin runs of `claude -p` from folders
+  under `~/.claude` (measured: 22 of 27 "closed" sessions) are left out.
+- Background work moves a card to Working; quiet open tabs become one-line rows;
+  the timeline folds a session's turns within half an hour into one line; a theme
+  menu on the page.
 
 ## 1.1.0
 
