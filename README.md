@@ -47,7 +47,7 @@ a chat to find out what it is doing.
 |---|---|
 | 🔔 **Who is waiting on you** | `asking` and `interrupted` sort to the top and pulse. Everything else is noise until you have dealt with them. |
 | 🎨 **How full each context is** | `379k/1M`, coloured on a green→amber→red ramp. The red one is the chat to compact next. |
-| 💸 **What it has cost** | Per session, from the token counters and the current price list. |
+| 💸 **What it has cost** | Per session, sub-agents and workflow agents included: every `usage` block in the transcripts, priced from `lib/prices.js` (API-equivalent). |
 | 🏷 **Which project it is about** | Every VS Code chat shares one `cwd`; the `focus` tag is worked out from the conversation instead. Same project = same colour and glyph, always. |
 | 🧭 **What it is doing right now** | The tool it is running, plan progress (`3/7`), the task in flight, anything you left queued. |
 | 🌳 **What its sub-agents are doing** | Every sub-agent and workflow run, as a tree under its session: each agent's own status, tool and age, and a workflow's phase and `done/total`. The IDE extension has no `/workflows`; this is the view it lacks. |
@@ -55,6 +55,26 @@ a chat to find out what it is doing.
 It watches; it never drives. No hooks, nothing written into Claude Code's own
 directories, `settings.json` untouched. Three keys: `t` for themes, `g` for
 grouping, `a` to show or hide the agent tree.
+
+### The web board
+
+```powershell
+cmon --web               # http://127.0.0.1:4280/  (--port=… to change)
+```
+
+The same data as a page: sessions in three lanes (waiting on you · working ·
+finished), each card with its context bar, cost, workflow progress bars and plan
+progress; click a card for its task list, every sub-agent and workflow agent, and
+the session id to copy. A **Today** column lists what finished — sessions,
+workflows (with agent count, duration and cost), tasks and sub-agents — kept in
+`~/.claude/monitor/timeline/<date>.jsonl` so a restart keeps the day.
+
+Open it in VS Code's Simple Browser (`Ctrl+Shift+P` → *Simple Browser: Show*) to
+keep it next to your chats without another window. It binds to 127.0.0.1 only,
+loads nothing from the network, pushes updates only when something changed, and
+draws nothing while the tab is hidden. Measured with 5 live sessions: the server
+holds ~68 MB and ~6% of one core; the page ~1 MB of JS heap. The colours follow
+the configured theme. `cmon --web --demo` serves fabricated sessions.
 
 ---
 
@@ -76,8 +96,8 @@ cmon --theme=nord --group=focus     # flags pass straight through
 
 The shim calls `node <repo>/monitor.js`, so `git pull` updates the command with
 no reinstall; `--uninstall` removes it (moves the shim aside rather than deleting
-it). Node 18+; Node 22.5+ additionally unlocks the cost and curated-name columns
-through `node:sqlite`.
+it). Node 18+; Node 22.5+ additionally unlocks curated names from the ccboard
+database through `node:sqlite`.
 
 ---
 
@@ -233,8 +253,8 @@ keeps the distinction when colour is off.
 | Column | Meaning | Source |
 |---|---|---|
 | `ctx` | context used against the window, e.g. `379k/1M`, coloured by how full it is | newest `usage`: input + cache read + cache creation |
-| `cost` | money spent by this session | `token_usage` × `model_pricing` |
-| `tokens` | all tokens including cache reads | dashboard.db |
+| `cost` | API-equivalent spend, sub-agents included | transcript `usage` × `lib/prices.js`, one count per `message.id` |
+| `tokens` | all tokens including cache reads | same |
 | `tasks` | plan progress `3/7`, plus the task in flight after `▸` | `~/.claude/tasks/<session>/*.json` |
 | `agents` | running / total sub-agents, workflow agents included | `<session>/subagents/`, else dashboard.db |
 | `effort`, `mode` | reasoning effort · permission mode | transcript |
@@ -342,7 +362,8 @@ and it backs up `settings.json` first.
 | `~/.claude/projects/<enc>/<id>.jsonl` | title, status, model, context, focus, queue | read only, windowed |
 | `~/.claude/projects/<enc>/<id>/subagents/` | sub-agents, workflow runs and their journals | read only, windowed |
 | `~/.claude/projects/*/<id>/workflows/` | a workflow's name (its script) and how it ended (`<runId>.json`) | read only |
-| `~/.claude/agent-dashboard/dashboard.db` | curated names, cost, sub-agent counts (fallback) | read only, optional |
+| `~/.claude/agent-dashboard/dashboard.db` | curated names, sub-agent counts (fallback) | read only, optional |
+| `~/.claude/monitor/timeline/<date>.jsonl` | the web board's "Today" column | cmon's own directory, written by `--web` |
 | `~/.claude/tasks/<session>/*.json` | plan progress | read only |
 | `<workspace>/CLAUDE.md` | the project list for `focus` | read only |
 | `~/.claude/monitor/config.json` | configuration | read + created once |
@@ -408,8 +429,10 @@ day upstream picks a licence.
 ## Notes
 
 - Windows-first by design; platform code is confined to `lib/platform/win32.js`.
-- The dashboard database is read with `node:sqlite`. Without it, names, cost and
-  sub-agent counts simply go quiet.
+- The dashboard database is read with `node:sqlite`. Without it, curated names
+  and the sub-agent count fallback simply go quiet. Cost no longer depends on it.
+- Prices live in `lib/prices.js`; a model missing there still counts its tokens
+  but adds $0. Update the table when a model ships.
 - `npm run probe` re-measures the file formats this code depends on and writes
   `docs/DATA-SOURCES.md` (untracked, redacted by default — it describes *your*
   sessions).

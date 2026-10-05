@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cmon</title>
+<style>
+  /* Colours come from the active cmon theme (config.json "theme"); these are only
+     the fallback until the first snapshot arrives. */
+  :root {
+    --bg: #1d1f21; --fg: #e8e8e3; --dim: #8a8a80; --accent: #fd971f; --border: #3a3b35;
+    --running: #66d9ef; --thinking: #ae81ff; --done: #a6e22e; --asking: #e6db74;
+    --interrupted: #f92672; --idle: #75715e;
+    --surface: color-mix(in srgb, var(--fg) 4%, var(--bg));
+    --surface-2: color-mix(in srgb, var(--fg) 8%, var(--bg));
+    --line: color-mix(in srgb, var(--border) 80%, var(--bg));
+    --mono: ui-monospace, "Cascadia Code", "Cascadia Mono", Consolas, monospace;
+    --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); font: 13px/1.45 var(--sans); }
+  body { padding: 0 20px 32px; min-height: 100vh; }
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  /* header ------------------------------------------------------------------ */
+  header {
+    position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+    padding: 14px 0 12px; background: var(--bg); border-bottom: 1px solid var(--line);
+  }
+  .brand { display: flex; align-items: baseline; gap: 8px; }
+  .brand b { font: 700 18px/1 var(--mono); color: var(--accent); letter-spacing: -.5px; }
+  .brand span { color: var(--dim); }
+  .stats { display: flex; gap: 8px; flex-wrap: wrap; }
+  .stat {
+    display: flex; align-items: center; gap: 7px; padding: 5px 11px; border-radius: 999px;
+    background: var(--surface); border: 1px solid var(--line); white-space: nowrap;
+  }
+  .stat .v { font: 600 13px var(--mono); }
+  .stat .k { color: var(--dim); }
+  .stat.hot { border-color: color-mix(in srgb, var(--asking) 60%, var(--line)); }
+  .stat.hot .v { color: var(--asking); }
+  .spacer { flex: 1; }
+  .conn { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 12px; }
+  .conn i { width: 7px; height: 7px; border-radius: 50%; background: var(--done); }
+  .conn.off i { background: var(--interrupted); animation: blink 1s infinite; }
+  .clock { font: 12px var(--mono); color: var(--dim); }
+
+  /* layout ------------------------------------------------------------------ */
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 22px; margin-top: 18px; }
+  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  .lane { margin-bottom: 26px; }
+  .lane h2 {
+    display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font: 600 11px/1 var(--sans);
+    letter-spacing: .08em; text-transform: uppercase; color: var(--dim);
+  }
+  .lane h2 .n { font-family: var(--mono); color: var(--fg); opacity: .7; }
+  .lane h2::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; align-items: start; }
+  @media (max-width: 520px) { .cards { grid-template-columns: 1fr; } body { padding: 0 12px 24px; } }
+  .empty { color: var(--dim); padding: 14px 16px; border: 1px dashed var(--line); border-radius: var(--radius); }
+
+  /* card -------------------------------------------------------------------- */
+  .card {
+    --st: var(--idle);
+    position: relative; overflow: hidden; border-radius: var(--radius); background: var(--surface);
+    border: 1px solid var(--line); transition: border-color .2s, transform .2s;
+  }
+  .card:hover { border-color: color-mix(in srgb, var(--st) 45%, var(--line)); }
+  .card::before {   /* the project colour, same as the TUI's focus tag */
+    content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--focus, var(--line));
+  }
+  .card.asking { border-color: color-mix(in srgb, var(--asking) 55%, var(--line));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--asking) 18%, transparent), 0 6px 24px -12px var(--asking); }
+  .card.interrupted { border-color: color-mix(in srgb, var(--interrupted) 45%, var(--line)); }
+  .card.done, .card.idle { background: color-mix(in srgb, var(--fg) 2.5%, var(--bg)); }
+  .head { display: block; width: 100%; text-align: left; padding: 12px 14px 12px 17px; }
+  .row1 { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px 2px 7px; border-radius: 999px;
+    font: 600 11px/18px var(--sans); color: var(--st); background: color-mix(in srgb, var(--st) 13%, transparent);
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--st); flex: none; }
+  .running .dot, .thinking .dot { animation: pulse 1.4s ease-in-out infinite; }
+  .asking .dot { animation: ring 1.6s ease-out infinite; }
+  .focus { display: inline-flex; align-items: center; gap: 5px; color: var(--dim); font-size: 12px; min-width: 0; }
+  .focus i { width: 6px; height: 6px; border-radius: 2px; background: var(--focus); flex: none; }
+  .row1 .age { margin-left: auto; color: var(--dim); font: 12px var(--mono); white-space: nowrap; }
+  .title {
+    font-size: 14px; font-weight: 600; line-height: 1.35; margin: 0 0 8px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .doing { color: var(--dim); font-size: 12px; margin: -2px 0 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .doing b { color: var(--fg); font-weight: 500; }
+  .meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; color: var(--dim); font-size: 12px; }
+  .meta .cost { margin-left: auto; color: var(--fg); font: 600 12px var(--mono); }
+  .ctx { display: flex; align-items: center; gap: 7px; }
+  .bar { position: relative; width: 64px; height: 5px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+  .bar > i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--c, var(--done)); }
+  .bar.wide { width: 100%; }
+
+  /* workflows + plan, always visible ---------------------------------------- */
+  .work { padding: 0 14px 12px 17px; display: grid; gap: 8px; }
+  .wf {
+    display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 4px 10px;
+    padding: 8px 10px; border-radius: 8px; background: var(--surface-2);
+  }
+  .wf .ic { font: 600 10px var(--mono); color: var(--thinking); border: 1px solid color-mix(in srgb, var(--thinking) 50%, transparent);
+    border-radius: 4px; padding: 0 4px; }
+  .wf .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wf .nm small { color: var(--dim); font-weight: 400; margin-left: 6px; }
+  .wf .rt { font: 12px var(--mono); color: var(--dim); white-space: nowrap; }
+  .wf .bar { grid-column: 1 / -1; }
+  .wf.done .ic { color: var(--done); border-color: color-mix(in srgb, var(--done) 50%, transparent); }
+  .plan { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--dim); }
+  .plan .bar { flex: 1; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
+  .chip.on { color: var(--running); border-color: color-mix(in srgb, var(--running) 45%, var(--line)); }
+
+  /* detail (click a card) --------------------------------------------------- */
+  .detail { display: none; border-top: 1px solid var(--line); padding: 12px 14px 14px 17px; gap: 14px; }
+  .open .detail { display: grid; }
+  .detail h4 { margin: 0 0 6px; font: 600 10.5px var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+  .tasks, .agents { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+  .tasks li, .agents li { display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; }
+  .tasks .box { font-family: var(--mono); width: 16px; flex: none; color: var(--dim); }
+  .tasks .completed { color: var(--dim); }
+  .tasks .completed .box { color: var(--done); }
+  .tasks .completed span { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--dim) 60%, transparent); }
+  .tasks .in_progress { color: var(--fg); font-weight: 600; }
+  .tasks .in_progress .box { color: var(--running); }
+  .tasks .blocked { font-size: 11px; color: var(--dim); font-weight: 400; }
+  .agents li .dot { align-self: center; }
+  .agents li .lbl { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .agents li .rt { color: var(--dim); font: 11.5px var(--mono); white-space: nowrap; }
+  .facts { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; font-size: 12px; }
+  .facts dt { color: var(--dim); }
+  .facts dd { margin: 0; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .copy { color: var(--accent); border-bottom: 1px dotted; }
+
+  /* timeline ---------------------------------------------------------------- */
+  aside { position: sticky; top: 74px; align-self: start; max-height: calc(100vh - 92px); display: flex; flex-direction: column;
+    background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+  @media (max-width: 1100px) { aside { position: static; max-height: none; } }
+  aside header { position: static; padding: 12px 14px 10px; background: none; gap: 10px; }
+  aside header h3 { margin: 0; font-size: 13px; }
+  aside header .chips { margin-left: auto; }
+  aside .chip { cursor: pointer; }
+  aside .chip.sel { color: var(--bg); background: var(--fg); border-color: var(--fg); }
+  .tl { overflow: auto; padding: 4px 14px 14px; }
+  .hour { font: 600 10.5px var(--mono); color: var(--dim); margin: 12px 0 4px; }
+  .ev { position: relative; display: grid; grid-template-columns: 18px 1fr auto; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); }
+  .ev:first-of-type { border-top: 0; }
+  .ev .g { width: 18px; height: 18px; border-radius: 5px; display: grid; place-items: center; font: 700 10px var(--mono);
+    color: var(--c); background: color-mix(in srgb, var(--c) 15%, transparent); }
+  .ev .what { font-size: 12.5px; min-width: 0; }
+  .ev .what b { font-weight: 600; }
+  .ev .what .sub { display: block; color: var(--dim); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ev .when { font: 11.5px var(--mono); color: var(--dim); white-space: nowrap; }
+  .ev.fresh { animation: arrive .6s ease-out; }
+
+  footer { margin-top: 6px; color: var(--dim); font-size: 12px; }
+
+  @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.75); } }
+  @keyframes ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--asking) 70%, transparent); }
+    100% { box-shadow: 0 0 0 7px transparent; } }
+  @keyframes blink { 50% { opacity: .2; } }
+  @keyframes arrive { from { background: color-mix(in srgb, var(--accent) 18%, transparent); } }
+  @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><b>cmon</b><span>claude monitor</span></div>
+  <div class="stats" id="stats"></div>
+  <div class="spacer"></div>
+  <div class="conn" id="conn"><i></i><span>live</span></div>
+  <div class="clock num" id="clock"></div>
+</header>
+<main>
+  <section id="board"></section>
+  <aside>
+    <header>
+      <h3>Today</h3>
+      <div class="chips" id="filters"></div>
+    </header>
+    <div class="tl" id="timeline"></div>
+  </aside>
+</main>
+
+<script>
+'use strict';
+// Read-only page: everything below renders the snapshot cmon sends over /events.
+// No network beyond 127.0.0.1, no storage beyond which cards you opened.
+
+const STATUS = {
+  asking: 'Needs you', interrupted: 'Stopped', running: 'Running', thinking: 'Thinking', done: 'Done', idle: 'Idle',
+};
+const LANES = [
+  { key: 'you', title: 'Waiting on you', has: ['asking', 'interrupted'], none: 'Nothing is waiting on you.' },
+  { key: 'work', title: 'Working', has: ['running', 'thinking'], none: 'Nothing is running.' },
+  { key: 'rest', title: 'Finished · idle', has: ['done', 'idle'], none: '' },
+];
+const EV = {
+  session: { g: 'S', label: 'Session' }, workflow: { g: 'W', label: 'Workflow' },
+  task: { g: '✓', label: 'Task' }, agent: { g: 'A', label: 'Agent' },
+};
+
+let state = null;
+let pending = null;
+let filter = 'all';
+const seenEvents = new Set();
+const open = new Set(JSON.parse(sessionStorage.getItem('cmon.open') || '[]'));
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+
+function ago(ms) {
+  if (!ms) return '';
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  if (s < 45) return 'now';
+  const m = Math.round(s / 60);
+  if (m < 60) return m + 'm';
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}h ${m % 60}m` : Math.floor(h / 24) + 'd';
+}
+const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const dur = (ms) => { const m = Math.round(ms / 60000); return m < 60 ? m + 'm' : `${Math.floor(m / 60)}h ${m % 60}m`; };
+function money(v) {
+  if (v == null) return '';
+  return v >= 100 ? '$' + Math.round(v).toLocaleString('en-US') : '$' + v.toFixed(2);
+}
+function tokens(n) {
+  if (!n) return '0';
+  return n >= 1e6 ? (n / 1e6).toFixed(n >= 1e7 ? 0 : 1).replace('.0', '') + 'M' : Math.round(n / 1e3) + 'k';
+}
+// Context fill on the theme's own green -> amber -> red.
+const ctxColour = (r) => (r < 0.6 ? 'var(--done)' : r < 0.85 ? 'var(--asking)' : 'var(--interrupted)');
+// Live dots keep their phase across re-renders instead of restarting every refresh.
+const phase = (period) => `animation-delay:-${Date.now() % period}ms`;
+
+function applyTheme(t) {
+  if (!t || !t.colours) return;
+  const root = document.documentElement.style;
+  const c = t.colours;
+  const map = { bg: c.bg, fg: c.header, dim: c.dim, accent: c.accent, border: c.border,
+    running: c.running, thinking: c.thinking, done: c.done, asking: c.asking, interrupted: c.interrupted, idle: c.idle };
+  for (const [k, v] of Object.entries(map)) if (v) root.setProperty('--' + k, v);
+  document.documentElement.style.colorScheme = t.light ? 'light' : 'dark';
+}
+
+function card(r) {
+  const plan = r.plan;
+  const ratio = r.contextTokens && r.contextLimit ? r.contextTokens / r.contextLimit : 0;
+  const live = r.status === 'running' || r.status === 'thinking';
+  const doing = r.status === 'asking' ? (r.action === 'AskUserQuestion' ? 'Asked you a question' : 'Waiting for your approval' + (r.action ? `: <b>${esc(r.action)}</b>` : ''))
+    : live && (plan && plan.current) ? `<b>${esc(plan.current)}</b>${r.action ? ' · ' + esc(r.action) : ''}`
+    : r.status === 'running' && r.action ? `Running <b>${esc(r.action)}</b>`
+    : r.queued ? `${r.queued} message${r.queued > 1 ? 's' : ''} queued` : '';
+
+  const wfs = (r.workflows || []).map((w) => {
+    const done = w.state !== 'running';
+    const pct = w.total ? Math.round(100 * w.done / w.total) : 0;
+    return `<div class="wf ${done ? 'done' : ''}">
+      <span class="ic">wf</span>
+      <span class="nm">${esc(w.name || w.runId)}${w.phase && !done ? `<small>${esc(w.phase)}</small>` : ''}</span>
+      <span class="rt">${w.done}/${w.total}${w.running ? ` · ${w.running} live` : ''}${w.cost ? ' · ' + money(w.cost) : ''}</span>
+      <div class="bar wide"><i style="width:${pct}%;--c:${done ? 'var(--done)' : 'var(--thinking)'}"></i></div>
+    </div>`;
+  }).join('');
+
+  const planRow = plan && plan.total ? `<div class="plan"><span class="num">${plan.completed}/${plan.total}</span>
+      <div class="bar"><i style="width:${Math.round(100 * plan.completed / plan.total)}%;--c:var(--running)"></i></div>
+      <span>tasks</span></div>` : '';
+
+  const plain = r.agents || [];
+  const liveAgents = plain.filter((a) => a.status === 'running' || a.status === 'thinking').length;
+  const agentChip = plain.length ? `<div class="chips"><span class="chip ${liveAgents ? 'on' : ''}">${liveAgents ? liveAgents + ' of ' : ''}${plain.length} sub-agent${plain.length > 1 ? 's' : ''}</span></div>` : '';
+
+  const work = wfs || planRow || agentChip ? `<div class="work">${wfs}${planRow}${agentChip}</div>` : '';
+
+  return `<article class="card ${r.status} ${open.has(r.sessionId) ? 'open' : ''}" data-id="${esc(r.sessionId)}"
+      style="--st:var(--${r.status});${r.focusColour ? '--focus:' + r.focusColour : ''}">
+    <button class="head" data-toggle="${esc(r.sessionId)}" aria-expanded="${open.has(r.sessionId)}">
+      <div class="row1">
+        <span class="pill"><span class="dot" style="${live || r.status === 'asking' ? phase(1400) : ''}"></span>${STATUS[r.status] || r.status}</span>
+        ${r.focus ? `<span class="focus"><i></i>${esc(r.focus.name)}</span>` : ''}
+        <span class="age" data-ago="${r.lastEvent}">${ago(r.lastEvent)}</span>
+      </div>
+      <h3 class="title">${esc(r.title)}</h3>
+      ${doing ? `<div class="doing">${doing}</div>` : ''}
+      <div class="meta">
+        <span>${esc(r.model || '?')}${r.effort ? ' · ' + esc(r.effort) : ''}</span>
+        ${ratio ? `<span class="ctx" title="context window"><span class="bar"><i style="width:${Math.min(100, Math.round(ratio * 100))}%;--c:${ctxColour(ratio)}"></i></span>
+          <span class="num">${tokens(r.contextTokens)}/${tokens(r.contextLimit)}</span></span>` : ''}
+        <span>${esc(r.src)}</span>
+        <span class="cost" title="API-equivalent cost, sub-agents included">${money(r.cost)}</span>
+      </div>
+    </button>
+    ${work}
+    <div class="detail">${detail(r)}</div>
+  </article>`;
+}
+
+function detail(r) {
+  const parts = [];
+  const list = r.plan && r.plan.list;
+  if (list && list.length) {
+    const box = { completed: '✓', in_progress: '▸', pending: '○' };
+    parts.push(`<div><h4>Tasks</h4><ul class="tasks">${list.map((t) => `<li class="${esc(t.status)}">
+      <span class="box">${box[t.status] || '○'}</span><span>${esc(t.status === 'in_progress' && t.activeForm ? t.activeForm : t.subject)}
+      ${t.status === 'pending' && t.blockedBy && t.blockedBy.length ? `<span class="blocked"> · after #${t.blockedBy.map(esc).join(', #')}</span>` : ''}</span></li>`).join('')}</ul></div>`);
+  }
+  for (const w of r.workflows || []) {
+    if (!w.agents || !w.agents.length) continue;
+    parts.push(`<div><h4>${esc(w.name)} · ${w.state === 'running' ? 'running for ' + dur(Date.now() - w.startedMs) : esc(w.state)}</h4>
+      <ul class="agents">${w.agents.map((a) => agentLi(a, a.phase)).join('')}</ul></div>`);
+  }
+  if ((r.agents || []).length) {
+    parts.push(`<div><h4>Sub-agents</h4><ul class="agents">${r.agents.map((a) => agentLi(a, a.model)).join('')}</ul></div>`);
+  }
+  parts.push(`<dl class="facts">
+    ${r.branch ? `<dt>branch</dt><dd>${esc(r.branch)}</dd>` : ''}
+    ${r.permissionMode ? `<dt>mode</dt><dd>${esc(r.permissionMode)}</dd>` : ''}
+    <dt>tokens</dt><dd>${tokens(r.tokens)}${r.agentsCost ? ` · sub-agents ${money(r.agentsCost)}` : ''}</dd>
+    <dt>session</dt><dd><button class="copy" data-copy="${esc(r.sessionId)}" title="copy the id (claude --resume)">${esc(r.sessionId.slice(0, 8))}</button></dd>
+  </dl>`);
+  return parts.join('');
+}
+
+function agentLi(a, extra) {
+  const live = a.status === 'running' || a.status === 'thinking';
+  return `<li style="--st:var(--${a.status === 'done' ? 'done' : a.status})"><span class="dot" style="${live ? phase(1400) + ';animation:pulse 1.4s ease-in-out infinite' : ''}"></span>
+    <span class="lbl">${esc(a.label || a.id)}</span>
+    <span class="rt">${esc([a.action, extra].filter(Boolean).join(' · '))} ${ago(a.lastEventMs)}</span></li>`;
+}
+
+function renderBoard() {
+  const rows = state.rows || [];
+  $('board').innerHTML = LANES.map((lane) => {
+    const list = rows.filter((r) => lane.has.includes(r.status));
+    if (!list.length && !lane.none) return '';
+    return `<div class="lane"><h2>${lane.title} <span class="n">${list.length}</span></h2>
+      ${list.length ? `<div class="cards">${list.map(card).join('')}</div>` : `<div class="empty">${lane.none}</div>`}</div>`;
+  }).join('') + footer();
+}
+
+function footer() {
+  const hidden = [];
+  if (state.hiddenEmpty) hidden.push(`${state.hiddenEmpty} empty tab${state.hiddenEmpty > 1 ? 's' : ''}`);
+  if (state.hiddenStale) hidden.push(`${state.hiddenStale} older session${state.hiddenStale > 1 ? 's' : ''}`);
+  return `<footer>${state.demo ? 'Demo data. ' : ''}${hidden.length ? 'Hidden: ' + hidden.join(', ') + '. ' : ''}Theme: ${esc(state.theme && state.theme.name)} · change it with <span class="num">node scripts/config.js set theme &lt;name&gt;</span></footer>`;
+}
+
+function renderStats() {
+  const rows = state.rows || [];
+  const count = (...s) => rows.filter((r) => s.includes(r.status)).length;
+  const waiting = count('asking', 'interrupted');
+  const total = rows.reduce((s, r) => s + (r.cost || 0), 0);
+  const wfLive = rows.reduce((s, r) => s + (r.workflows || []).filter((w) => w.state === 'running').length, 0);
+  $('stats').innerHTML = [
+    `<span class="stat ${waiting ? 'hot' : ''}"><span class="v">${waiting}</span><span class="k">waiting on you</span></span>`,
+    `<span class="stat"><span class="v">${count('running', 'thinking')}</span><span class="k">working</span></span>`,
+    wfLive ? `<span class="stat"><span class="v">${wfLive}</span><span class="k">workflow${wfLive > 1 ? 's' : ''} live</span></span>` : '',
+    `<span class="stat" title="API-equivalent, open sessions, sub-agents included"><span class="v">${money(total)}</span><span class="k">open sessions</span></span>`,
+  ].join('');
+  document.title = waiting ? `(${waiting}) cmon` : 'cmon';
+}
+
+function renderFilters() {
+  const counts = { all: 0 };
+  for (const e of state.timeline || []) { counts.all++; counts[e.type] = (counts[e.type] || 0) + 1; }
+  const keys = ['all', 'session', 'workflow', 'task', 'agent'].filter((k) => k === 'all' || counts[k]);
+  $('filters').innerHTML = keys.map((k) => `<button class="chip ${filter === k ? 'sel' : ''}" data-filter="${k}">${k === 'all' ? 'All' : EV[k].label + 's'} ${counts[k] || 0}</button>`).join('');
+}
+
+function eventText(e) {
+  const status = { done: 'finished', asking: 'is waiting on you', interrupted: 'stopped', idle: 'went quiet' };
+  if (e.type === 'session') return { c: `var(--${e.status})`, what: `<b>${esc(e.title)}</b> ${status[e.status] || esc(e.status)}`, sub: e.focus };
+  if (e.type === 'workflow') return { c: e.status === 'done' ? 'var(--done)' : 'var(--interrupted)',
+    what: `Workflow <b>${esc(e.name)}</b> ${e.status === 'done' ? 'finished' : 'stopped'}`,
+    sub: [e.total ? e.total + ' agents' : '', e.durationMs ? dur(e.durationMs) : '', e.cost ? money(e.cost) : '', e.title].filter(Boolean).join(' · ') };
+  if (e.type === 'task') return { c: 'var(--running)', what: `<b>${esc(e.name)}</b>`, sub: e.title };
+  return { c: 'var(--thinking)', what: `Sub-agent <b>${esc(e.name)}</b> ${e.status === 'done' ? 'finished' : esc(e.status)}`, sub: e.title };
+}
+
+function renderTimeline() {
+  const list = (state.timeline || []).filter((e) => filter === 'all' || e.type === filter).slice().reverse();
+  if (!list.length) {
+    $('timeline').innerHTML = `<div class="empty" style="margin-top:8px">Nothing has finished yet today. Sessions, workflows, tasks and sub-agents appear here as they finish.</div>`;
+    return;
+  }
+  let hour = '';
+  const out = [];
+  for (const e of list) {
+    const h = new Date(e.at).toLocaleTimeString([], { hour: '2-digit' }) + ':00';
+    if (h !== hour) { hour = h; out.push(`<div class="hour">${h}</div>`); }
+    const key = `${e.at}|${e.type}|${e.sessionId}|${e.name || ''}`;
+    const fresh = seenEvents.size && !seenEvents.has(key);
+    seenEvents.add(key);
+    const t = eventText(e);
+    out.push(`<div class="ev ${fresh ? 'fresh' : ''}" style="--c:${t.c}"><span class="g">${EV[e.type] ? EV[e.type].g : '·'}</span>
+      <span class="what">${t.what}${t.sub ? `<span class="sub">${esc(t.sub)}</span>` : ''}</span>
+      <span class="when" title="${clock(e.at)}">${clock(e.at)}</span></div>`);
+  }
+  $('timeline').innerHTML = out.join('');
+}
+
+function render() {
+  if (!state) return;
+  applyTheme(state.theme);
+  renderStats();
+  renderBoard();
+  renderFilters();
+  renderTimeline();
+}
+
+// A hidden tab keeps only the latest snapshot and draws nothing.
+function receive(next) {
+  if (document.hidden) { pending = next; return; }
+  state = next;
+  render();
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && pending) { state = pending; pending = null; render(); }
+});
+
+document.addEventListener('click', (ev) => {
+  const copy = ev.target.closest('[data-copy]');
+  if (copy) {
+    ev.stopPropagation();
+    navigator.clipboard && navigator.clipboard.writeText(copy.dataset.copy).then(() => {
+      copy.textContent = 'copied'; setTimeout(() => render(), 900);
+    });
+    return;
+  }
+  const f = ev.target.closest('[data-filter]');
+  if (f) { filter = f.dataset.filter; renderFilters(); renderTimeline(); return; }
+  const t = ev.target.closest('[data-toggle]');
+  if (t) {
+    const id = t.dataset.toggle;
+    open.has(id) ? open.delete(id) : open.add(id);
+    try { sessionStorage.setItem('cmon.open', JSON.stringify([...open])); } catch (e) { /* private mode */ }
+    const el = t.closest('.card');
+    el.classList.toggle('open', open.has(id));
+    t.setAttribute('aria-expanded', open.has(id));
+  }
+});
+
+// Ages and the clock tick locally; the data only moves when cmon sends it.
+setInterval(() => {
+  $('clock').textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  if (document.hidden) return;
+  for (const el of document.querySelectorAll('[data-ago]')) el.textContent = ago(Number(el.dataset.ago));
+}, 15000);
+$('clock').textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+function connect() {
+  const es = new EventSource('/events');
+  es.onmessage = (m) => { $('conn').className = 'conn'; $('conn').lastChild.textContent = 'live'; receive(JSON.parse(m.data)); };
+  es.onerror = () => { $('conn').className = 'conn off'; $('conn').lastChild.textContent = 'reconnecting'; };
+}
+connect();
+</script>
+</body>
+</html>

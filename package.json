@@ -1,6 +1,6 @@
 {
   "name": "cmon",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "cmon — a read-only wall display for every Claude Code session you have open: real titles, transcript-derived status, cost, context and project focus",
   "main": "monitor.js",
   "bin": {

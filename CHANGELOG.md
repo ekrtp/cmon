@@ -4,6 +4,24 @@ This fork's history, newest first. Upstream
 ([ibrahimokdadov/claudeMonitor](https://github.com/ibrahimokdadov/claudeMonitor))
 is the two commits at the bottom.
 
+## 1.2.0
+
+- **`cmon --web`: the board as a local page** (`lib/web.js`, `web/index.html`).
+  Three lanes (waiting on you · working · finished), cards with context bar,
+  cost, workflow progress bars and plan progress; click for the full task list,
+  every sub-agent and workflow agent, and the session id. 127.0.0.1 only, no
+  network, Server-Sent Events pushed only on change, nothing drawn while hidden.
+- **Today timeline** (`lib/timeline.js`): sessions, workflows (agents, duration,
+  cost), tasks and sub-agents as they finish, kept per day under
+  `~/.claude/monitor/timeline/`.
+- **Cost from the transcripts** (`lib/cost.js`, `lib/prices.js`). It used to come
+  from dashboard.db, which stopped updating on 2026-08-28 and had no Opus 5 row:
+  measured, every one of 13 live sessions came back with no cost at all. Now
+  every `usage` block is summed once per `message.id`, sub-agents and workflow
+  agents included, read incrementally (first pass over 13 sessions ~6 s, then
+  ~30 ms).
+- `lib/tasks.js` returns the task list itself, not only the counts.
+
 ## 1.1.0
 
 - **Sub-agents and workflow runs, as a tree under each session.** `/workflows`

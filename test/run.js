@@ -329,6 +329,25 @@ is('a corrupt task file is skipped, the rest still count', 1,
 is('an empty task directory returns null', null,
   tasksLib.progressIn(path.join(tmp, 'no-such-task-dir')));
 
+is('the task list comes back in id order with its status', [['one', 'completed'], ['three', 'in_progress'], ['four', 'pending']],
+  tasksLib.progressIn(path.join(tmp, 'tasks-a')).list.filter((t) => t.id !== 2).map((t) => [t.subject, t.status]));
+
+// ---------------------------------------------------------------- cost
+const costLib = require('../lib/cost');
+const costFile = fixture('cost.jsonl', [
+  // one API message written as two lines: counted once, the last write wins
+  JSON.stringify({ message: { id: 'm1', model: 'claude-opus-5-5', usage: { input_tokens: 1e6, output_tokens: 0 } } }),
+  JSON.stringify({ message: { id: 'm1', model: 'claude-opus-5-5', usage: { input_tokens: 1e6, output_tokens: 1e6 } } }),
+  JSON.stringify({ message: { id: 'm2', model: 'claude-opus-5', usage: { cache_read_input_tokens: 1e6,
+    cache_creation: { ephemeral_1h_input_tokens: 1e6, ephemeral_5m_input_tokens: 0 } } } }),
+  '{"usage": half-written',
+]);
+is('cost: one message.id counted once; opus-5-5 and opus-5 priced apart (4+20 + 0.5+10)', 34.5,
+  Math.round(costLib.forSession('no-subagents', costFile).cost * 100) / 100);
+fs.appendFileSync(costFile, '\n' + JSON.stringify({ message: { id: 'm3', model: 'claude-haiku-4-5', usage: { output_tokens: 1e6 } } }) + '\n');
+is('cost: an appended line is read incrementally', 39.5,
+  Math.round(costLib.forSession('no-subagents', costFile).cost * 100) / 100);
+
 // ---------------------------------------------------------------- notify
 console.log('\nnotifications');
 const outbox = [];

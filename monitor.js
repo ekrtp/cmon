@@ -11,7 +11,8 @@
 //   title   <- dashboard.db sessions.name, else the transcript's ai-title
 //   status  <- transcript: stop_reason / tool_use / interrupt markers
 //   extras  <- model, effort, context, branch, queue depth (same read)
-//              cost (dashboard.db), plan progress (~/.claude/tasks)
+//              plan progress (~/.claude/tasks)
+//   cost    <- usage on every transcript line, sub-agents included (lib/cost.js)
 //   tree    <- sub-agents and workflow runs, from <session>/subagents/ (lib/subagents.js)
 //   focus   <- which project the conversation is actually about (lib/projects.js)
 //
@@ -29,6 +30,8 @@
 //   --wide                 full session id
 //   --no-agents            hide the sub-agent and workflow tree under each session
 //   --no-input             ignore the keyboard
+//   --web                  serve the board as a local page (127.0.0.1) instead
+//   --port=4280            port for --web
 //   --demo                 fabricated sessions (screenshots, testing)
 //   --version  --help
 // Keys: t theme picker · g grouping · a agent tree on/off · Ctrl+C exit
@@ -50,6 +53,7 @@ const notify = require('./lib/notify');
 const identity = require('./lib/identity');
 const demo = require('./lib/demo');
 const subagents = require('./lib/subagents');
+const costLib = require('./lib/cost');
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes('--' + name);
@@ -283,7 +287,7 @@ function collect() {
       boardTitle: ccboard.name(s.sessionId),
     });
     const st = statusLib.derive(t.jsonl, { idleAfterMs: active.idleAfterMs });
-    const money = ccboard.usage(s.sessionId);
+    const money = costLib.forSession(s.sessionId, t.jsonl);
     const agents = ccboard.agents(s.sessionId);
     const plan = tasksLib.progress(s.sessionId);
     const focus = projects.focusOf(s.sessionId, s.cwd, t.jsonl);
@@ -318,6 +322,7 @@ function collect() {
       lastEvent,
       empty: !t.jsonl,
       pid: s.pid,
+      jsonl: t.jsonl,
     };
   }).sort((a, b) => {
     const d = statusLib.ATTENTION[a.status] - statusLib.ATTENTION[b.status];
@@ -847,8 +852,69 @@ function paintFrame(snapshot) {
   previousLines = lines.length;
 }
 
+// --- web -------------------------------------------------------------------
+// `--web` serves the board as a local page instead of painting the terminal.
+const hex = (rgb) => '#' + rgb.map((v) => v.toString(16).padStart(2, '0')).join('');
+
+function webState(snapshot, events) {
+  const light = themeIsLight();
+  const rows = snapshot.rows.map((r) => {
+    const { jsonl, tree, ...rest } = r;
+    const nodes = (tree && (tree.all || tree.items)) || [];
+    return {
+      ...rest,
+      focusColour: r.focus ? hex(identity.colourFor(r.focus.name, { light })) : null,
+      contextLimit: r.contextTokens ? contextLimit(r.contextTokens) : null,
+      workflows: nodes.filter((it) => it.kind === 'workflow').map((it) => ({
+        ...it.node, cost: DEMO ? (it.node.cost || 0) : costLib.forRun(jsonl, r.sessionId, it.node.runId),
+      })),
+      agents: nodes.filter((it) => it.kind === 'agent').map((it) => it.node),
+      agentCounts: tree ? tree.counts : null,
+    };
+  });
+  return {
+    theme: { name: active.theme, colours: theme.colours, light },
+    rows,
+    hiddenEmpty: snapshot.hiddenEmpty,
+    hiddenStale: snapshot.hiddenStale,
+    timeline: events,
+    demo: DEMO,
+  };
+}
+
+if (flag('web')) {
+  const web = require('./lib/web');
+  const timeline = require('./lib/timeline');
+  const port = Number(value('port')) || 4280;
+  const runCost = (row, runId) => costLib.forRun(row.jsonl, row.sessionId, runId);
+  const tick = () => {
+    const snapshot = collect();
+    notify.forget(new Set(snapshot.rows.map((r) => r.sessionId)));
+    notify.check(snapshot.rows, active.notifications);
+    const events = DEMO ? demo.timeline() : timeline.observe(snapshot.rows, { runCost });
+    server.publish(webState(snapshot, events));
+  };
+  const server = web.start(port, (url) => {
+    console.log(`cmon --web  ${url}`);
+    console.log('Open it in VS Code: Ctrl+Shift+P > "Simple Browser: Show" and paste the address. Ctrl+C stops.');
+  });
+  tick();
+  let timer = setInterval(tick, active.refreshMs);
+  configLib.watch((next) => {
+    cfg = next;
+    active = applyOverrides(cfg);
+    theme = themes.resolve(active.theme);
+    clearInterval(timer);
+    timer = setInterval(tick, active.refreshMs);
+    tick();
+  });
+  process.on('SIGINT', () => { server.close(); ccboard.close(); process.exit(0); });
+}
+
 // --- main ------------------------------------------------------------------
-if (ONCE) {
+if (flag('web')) {
+  // the web branch above owns the process
+} else if (ONCE) {
   paintFrame(collect());
   ccboard.close();
 } else {
