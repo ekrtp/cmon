@@ -854,25 +854,13 @@ is('status.derive tells a text block from a thinking block', ['partial-text', 'p
       message: { content: [{ type: 'thinking', thinking: '...' }], stop_reason: null } })]),
     { sidechain: true, now: Date.now() }).source]);
 
-// Two lines: the running run's heading, then "+1 more workflow, 5 agents" —
-// its 4 agents, and the finished run with its 1.
-is('fit() re-trims a tree to a smaller budget and names what it cut', [2, { workflows: 1, agents: 5 }],
-  (() => {
-    const r = subagents.forSession(s2.id, s2.jsonlPath, {});
-    const small = subagents.fit(r, 2);
-    return [subagents.lineCount(small), small.hidden];
-  })());
-
 const s3 = session('sess-many');
 for (let i = 0; i < 12; i++) {
   write(path.join(s3.sub, `agent-m${i}.meta.json`), [plainMeta(`worker ${i}`, 'sonnet')]);
   write(path.join(s3.sub, `agent-m${i}.jsonl`), [brief(), bash(String(i))]);
 }
-is('maxLines caps the tree and reports what it cut', [4, 8],
-  (() => {
-    const r = subagents.forSession(s3.id, s3.jsonlPath, { maxLines: 5 });
-    return [r.items.length, r.overflow];
-  })());
+is('nothing is cut: twelve running agents, twelve nodes', 12,
+  subagents.forSession(s3.id, s3.jsonlPath, {}).items.length);
 
 is('a sub-agent transcript is decided by its own sidechain lines', ['running', 'Bash'],
   (() => {
@@ -903,8 +891,7 @@ is('cache entries nobody asks for any more are swept', [true, 0],
 
 is('the agent tree is on by default and can be turned off', [true, false],
   [configLib.sanitise({}).showAgents, configLib.sanitise({ showAgents: false }).showAgents]);
-is('agentLines and agentLingerMs fall back when absurd', [8, 600000],
-  [configLib.sanitise({ agentLines: 0 }).agentLines, configLib.sanitise({ agentLingerMs: -5 }).agentLingerMs]);
+is('agentLingerMs falls back when absurd', 600000, configLib.sanitise({ agentLingerMs: -5 }).agentLingerMs);
 
 // ---------------------------------------------------------------- render
 // The real renderer on fabricated sessions, at two widths and every grouping.
@@ -937,14 +924,11 @@ is('a narrow workflow line keeps its done/total and marks the cut', true,
     const line = board(60).split('\n').find((l) => l.includes('release-checklist'));
     return Boolean(line) && line.includes('3/4') && line.includes('…');
   })());
-is('a short terminal shrinks the tree so the frame fits its height', [true, true, true],
+is('a short terminal still gets every tree line, and no "+N more"', [true, false],
   (() => {
-    const tall = board(100, ['--group=none']).split('\n').length;
     const out = board(100, ['--group=none'], 22);
-    const n = out.split('\n').length - 1;   // --once ends with a newline
-    return [tall - 1 > 22, n <= 22, out.includes('more')];
+    return [out.includes('List the cache keys') && out.includes('impl-1'), /\+\d+ more/.test(out)];
   })());
-is('cut tree lines are counted in agents, not lines', true, board(120).includes('+1 more agent'));
 
 is('clipAnsi cuts a coloured line without breaking an escape', [5, true],
   (() => {

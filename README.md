@@ -194,14 +194,13 @@ beneath the title, sharing the session's zebra band so the block reads as one:
   writes when it ends), its newest phase and `done/total`. `done` comes from
   the run's journal only: an agent that went quiet is not done, and one that was
   restarted (a resumed run starts it again under a new id) counts once. Inside
-  it: every agent still working or stuck, plus the two that finished last. On a
+  it: every agent the run started, working, stuck or finished. On a
   narrow terminal the name gives way before `done/total` does.
 - **What stays on screen:** everything that is working, plus whatever finished
-  in the last 10 minutes (`agentLingerMs`). At most 8 lines per session
-  (`agentLines`); the rest is summed up as `+N more agents` (or
-  `+1 more workflow, 3 agents`). The frame also never grows taller than the
-  terminal: when it would, the trees shrink to fit — every session keeps its own
-  lines — so the repaint does not scroll.
+  in the last 10 minutes (`agentLingerMs`). Nothing is cut and there is no
+  `+N more`: every node gets its line. A frame taller than the terminal is
+  repainted from a cleared screen and scrollback, so it scrolls instead of
+  stacking copies; make the pane taller to see it all at once.
 - **A session that launched a workflow** usually ends its own turn and reads
   `done` while the workflow runs on, also between two of its agents when none
   is open. Its ACTION cell then says `wf running`; when a narrow terminal has
@@ -337,7 +336,6 @@ touch the config of a board you have open.
   "notifications": false,
   "showAgents": true,
   "agentLingerMs": 600000,
-  "agentLines": 8,
   "agentIdleAfterMs": 900000
 }
 ```

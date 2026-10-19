@@ -4,6 +4,17 @@ This fork's history, newest first. Upstream
 ([ibrahimokdadov/claudeMonitor](https://github.com/ibrahimokdadov/claudeMonitor))
 is the two commits at the bottom.
 
+## 1.2.1
+
+- **The agent tree shows everything.** No 8-line cap per session, no
+  `+N more agents` / `+1 more workflow` line, no shrinking the tree to the
+  terminal height, and a workflow lists all of its agents instead of the open
+  ones plus the two that finished last. The linger window (`agentLingerMs`) is
+  the only filter left. `agentLines` is gone from the config; an old value is
+  ignored.
+- A frame taller than the terminal now clears the screen and scrollback before
+  each repaint, so it scrolls cleanly instead of stacking copies of its top.
+
 ## 1.2.0
 
 - **`cmon --web`: the board as a local page** (`lib/web.js`, `web/index.html`).
