@@ -10,6 +10,8 @@ is the two commits at the bottom.
   working, finished · idle, open and untouched, closed recently) is a button that
   folds the lane to its heading and count. Folds are kept in localStorage, so
   they survive a reload and a restart of `cmon --web`.
+- **The Today panel folds too.** Its heading folds it to one line with the
+  day's count, and the board takes the full width while it is folded.
 
 ## 1.2.1
 

@@ -49,7 +49,8 @@
 
   /* layout ------------------------------------------------------------------ */
   main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 22px; margin-top: 18px; }
-  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  main.tl-folded { grid-template-columns: minmax(0, 1fr) auto; }
+  @media (max-width: 1100px) { main, main.tl-folded { grid-template-columns: 1fr; } }
   .lane { margin-bottom: 26px; }
   .lane h2 {
     display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font: 600 11px/1 var(--sans);
@@ -58,11 +59,11 @@
   .lane h2 .n { font-family: var(--mono); color: var(--fg); opacity: .7; }
   .lane h2::after { content: ""; flex: 1; height: 1px; background: var(--line); }
   /* any lane folds to its heading; the fold is remembered in this browser */
-  .lane h2 .fold { display: inline-flex; align-items: center; gap: 8px; margin: 0; font: inherit; letter-spacing: inherit;
+  .fold { display: inline-flex; align-items: center; gap: 8px; margin: 0; font: inherit; letter-spacing: inherit;
     text-transform: inherit; color: inherit; }
   .lane h2 .fold:hover { color: var(--fg); }
-  .lane h2 .fold::before { content: "▾"; font-size: 10px; width: 10px; transition: transform .15s; }
-  .lane.folded h2 .fold::before { transform: rotate(-90deg); }
+  .fold::before { content: "▾"; font-size: 10px; width: 10px; transition: transform .15s; }
+  .folded .fold::before { transform: rotate(-90deg); }
   .lane.folded > :not(h2) { display: none; }
   .lane.folded { margin-bottom: 14px; }
   .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; align-items: start; }
@@ -214,6 +215,10 @@
   @media (max-width: 1100px) { aside { position: static; max-height: none; } }
   aside header { position: static; padding: 12px 14px 10px; background: none; gap: 10px; }
   aside header h3 { margin: 0; font-size: 13px; }
+  aside header h3 .n { font: 400 12px var(--mono); color: var(--dim); }
+  aside.folded header { padding-bottom: 12px; }
+  aside.folded header .chips, aside.folded .tl { display: none; }
+  aside header h3 .n:empty, aside:not(.folded) header h3 .n { display: none; }
   aside header .chips { margin-left: auto; }
   aside .chip { cursor: pointer; }
   aside .chip.sel { color: var(--bg); background: var(--fg); border-color: var(--fg); }
@@ -252,7 +257,7 @@
   <section id="board"><div class="loading">Reading transcripts… the first pass takes a few seconds.</div></section>
   <aside>
     <header>
-      <h3>Today</h3>
+      <h3><button class="fold" data-fold="today">Today <span class="n" id="today-n"></span></button></h3>
       <div class="chips" id="filters"></div>
     </header>
     <div class="tl" id="timeline"></div>
@@ -326,6 +331,15 @@ function laneHead(key, title, n) {
   return `<h2><button class="fold" data-fold="${key}" aria-expanded="${!folded.has(key)}">${title} <span class="n">${n}</span></button></h2>`;
 }
 const laneClass = (key) => `lane${folded.has(key) ? ' folded' : ''}`;
+// The Today panel folds the same way; folded, it shrinks to its heading and the
+// board takes the full width.
+function applyTodayFold() {
+  const on = folded.has('today');
+  document.querySelector('aside').classList.toggle('folded', on);
+  document.querySelector('main').classList.toggle('tl-folded', on);
+  document.querySelector('[data-fold="today"]').setAttribute('aria-expanded', String(!on));
+}
+applyTodayFold();
 
 function currentTheme() {
   const list = state.themes || [];
@@ -548,6 +562,7 @@ function renderFilters() {
   const counts = { all: 0 };
   for (const e of collapse(state.timeline || [])) { counts.all++; counts[e.type] = (counts[e.type] || 0) + 1; }
   const keys = ['all', 'session', 'workflow', 'task', 'agent'].filter((k) => k === 'all' || counts[k]);
+  $('today-n').textContent = counts.all || '';
   $('filters').innerHTML = keys.map((k) => `<button class="chip ${filter === k ? 'sel' : ''}" data-filter="${k}">${k === 'all' ? 'All' : EV[k].label + 's'} ${counts[k] || 0}</button>`).join('');
 }
 
@@ -644,7 +659,7 @@ document.addEventListener('click', (ev) => {
     const key = fold.dataset.fold;
     folded.has(key) ? folded.delete(key) : folded.add(key);
     store.set('cmon.folded', [...folded].join(','));
-    renderBoard();
+    key === 'today' ? applyTodayFold() : renderBoard();
     return;
   }
   const f = ev.target.closest('[data-filter]');
