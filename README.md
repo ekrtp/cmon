@@ -78,6 +78,9 @@ The same data as a page:
   they finish; workflows and turns that ended before cmon started are backfilled
   from Claude Code's own records. Kept in `~/.claude/monitor/timeline/<date>.jsonl`.
 - **Theme menu**: any of the 17 themes for this page only (stored in the browser).
+- **Folding**: click any lane's heading to fold it to one line with its count;
+  the fold is remembered in the browser, so a lane you never read stays out of
+  the way. The Today panel folds the same way, and the board then takes its width.
 
 Open it in VS Code's Simple Browser (`Ctrl+Shift+P` → *Simple Browser: Show*) to
 keep it next to your chats without another window. It binds to 127.0.0.1 only,

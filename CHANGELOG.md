@@ -4,6 +4,15 @@ This fork's history, newest first. Upstream
 ([ibrahimokdadov/claudeMonitor](https://github.com/ibrahimokdadov/claudeMonitor))
 is the two commits at the bottom.
 
+## Unreleased
+
+- **Foldable lanes on the web board.** Every lane heading (waiting on you,
+  working, finished · idle, open and untouched, closed recently) is a button that
+  folds the lane to its heading and count. Folds are kept in localStorage, so
+  they survive a reload and a restart of `cmon --web`.
+- **The Today panel folds too.** Its heading folds it to one line with the
+  day's count, and the board takes the full width while it is folded.
+
 ## 1.2.1
 
 - **The agent tree shows everything.** No 8-line cap per session, no
