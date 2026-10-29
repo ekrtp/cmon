@@ -6,6 +6,22 @@ is the two commits at the bottom.
 
 ## Unreleased
 
+- **Privacy per session** (`lib/privacy.js`, `~/.claude/monitor/privacy.json`).
+  A session can be `visible`, `title` (title, status, model, context and cost
+  only) or `blocked` (off the board, out of Today, no notifications, listed in a
+  Hidden lane to take back). Redaction happens inside `collect()`, so neither the
+  terminal nor the page ever receives what is hidden.
+- **Rules by project**: `{ "match": "ai-influencer", "level": "blocked" }` hides
+  every session whose focus, project or folder contains the text, new ones
+  included. A session's own level wins over a rule.
+- **Aliases**: a display name per session, used everywhere the title is.
+- **Private mode** for screen sharing: every visible session goes title-only at
+  once. `p` in the table, the Private button on the page.
+- Table: `h` opens a privacy picker (`v` / `t` / `b`), blocked sessions are
+  counted in the footer, title-only rows are marked `~`.
+- Page: an eye on each card (Visible · Title only · Block · Rename…), a folded
+  Hidden lane with the blocked sessions and the rules, and the first write
+  endpoint, `POST /api/privacy` — JSON only, own origin and host only.
 - **Foldable lanes on the web board.** Every lane heading (waiting on you,
   working, finished · idle, open and untouched, closed recently) is a button that
   folds the lane to its heading and count. Folds are kept in localStorage, so
