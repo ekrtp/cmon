@@ -12,6 +12,8 @@ const os = require('os');
 // you have open changes theme for a couple of seconds.
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-monitor-test-'));
 process.env.CLAUDE_MONITOR_CONFIG = path.join(tmpRoot, 'config.json');
+// Same for lib/privacy: a test that blocks a session must not hide it on your board.
+process.env.CLAUDE_MONITOR_PRIVACY = path.join(tmpRoot, 'privacy.json');
 
 const titles = require('../lib/titles');
 const statusLib = require('../lib/status');
@@ -378,6 +380,11 @@ is('interrupted also counts as wanting you', 1,
 
 is('the message names the session', true,
   outbox.length > 0 && outbox[outbox.length - 1].message.includes('T d'));
+
+notify.reset();
+const blockedRow = (status) => ({ ...nrow('z', status), privacy: { level: 'blocked' } });
+notify.check([blockedRow('running')], true, fakeSend);
+is('a blocked session never notifies', 0, notify.check([blockedRow('asking')], true, fakeSend));
 
 // ---------------------------------------------------------------- ccboard
 console.log('\nccboard (optional source)');
@@ -893,14 +900,148 @@ is('the agent tree is on by default and can be turned off', [true, false],
   [configLib.sanitise({}).showAgents, configLib.sanitise({ showAgents: false }).showAgents]);
 is('agentLingerMs falls back when absurd', 600000, configLib.sanitise({ agentLingerMs: -5 }).agentLingerMs);
 
+// ---------------------------------------------------------------- privacy
+console.log('\nprivacy');
+const privacy = require('../lib/privacy');
+is('the suite never touches the real privacy file', true, privacy.FILE.startsWith(tmpRoot));
+
+const prow = (extra) => ({
+  sessionId: 's1', title: 'Real title', titleSource: 'ai-title', status: 'done', model: 'opus-5', effort: 'high',
+  contextTokens: 50000, cost: 1.5, tokens: 900000, lastEvent: 1, pid: 7, src: 'vsc',
+  project: 'workspace', cwd: 'C:\\Users\\you\\workspace\\secret-app', branch: 'main', action: 'Bash',
+  permissionMode: 'default', focus: { name: 'billing-api', confident: true },
+  plan: { total: 2, completed: 1, current: 'Write the memo', list: [{ id: '1', subject: 'Write the memo' }] },
+  recent: { lastPrompt: 'the prompt', reply: 'the reply', activity: [{ name: 'Bash', detail: 'ls' }] },
+  agents: { running: 1, total: 2 },
+  tree: { items: [{ kind: 'agent', node: { label: 'Look at x' } }], all: [], counts: { running: 1, total: 2, workflows: 0 } },
+  jsonl: 'C:\\x.jsonl',
+  ...(extra || {}),
+});
+const P = (o) => privacy.sanitise(o);
+const lv = (row, prefs) => privacy.resolve(row, prefs).level;
+
+is('nothing set: visible', 'visible', lv(prow(), P({})));
+is('a session entry beats a rule', 'title',
+  lv(prow(), P({ sessions: { s1: { level: 'title' } }, rules: [{ match: 'billing', level: 'blocked' }] })));
+is('an explicit visible beats a rule', ['visible', 'session'],
+  (() => { const r = privacy.resolve(prow(), P({ sessions: { s1: { level: 'visible' } }, rules: [{ match: 'billing', level: 'blocked' }] })); return [r.level, r.source]; })());
+is('global turns visible into title, source global', ['title', 'global'],
+  (() => { const r = privacy.resolve(prow(), P({ global: true })); return [r.level, r.source]; })());
+is('global leaves blocked blocked', 'blocked', lv(prow(), P({ global: true, sessions: { s1: { level: 'blocked' } } })));
+is('a rule matches the focus name, case-insensitive', 'blocked', lv(prow(), P({ rules: [{ match: 'BILLING', level: 'blocked' }] })));
+is('a rule matches the project', 'title', lv(prow({ focus: null }), P({ rules: [{ match: 'worksp', level: 'title' }] })));
+is('a rule matches the cwd with backslashes as /', 'blocked',
+  lv(prow({ focus: null, project: 'x' }), P({ rules: [{ match: 'workspace/secret-app', level: 'blocked' }] })));
+is('a rule written with backslashes still matches', 'blocked',
+  lv(prow({ focus: null, project: 'x' }), P({ rules: [{ match: 'you\\workspace\\secret', level: 'blocked' }] })));
+is('the first matching rule wins', 'title',
+  lv(prow(), P({ rules: [{ match: 'billing', level: 'title' }, { match: 'workspace', level: 'blocked' }] })));
+is('no match: visible', 'visible', lv(prow(), P({ rules: [{ match: 'elsewhere', level: 'blocked' }] })));
+is('sanitise drops unknown levels and empty matches', { global: false, sessions: { s2: { alias: 'Kept' } }, rules: [{ match: 'ok', level: 'title' }] },
+  P({ global: 'yes', sessions: { s1: { level: 'secret' }, s2: { level: 'nope', alias: '  Kept ' } },
+    rules: [{ match: '', level: 'blocked' }, { match: 'x', level: 'weird' }, { match: 'ok', level: 'title' }, null] }));
+
+const titleOnly = privacy.redact(prow(), { level: 'title', alias: '', source: 'session', ruled: false });
+const CONTENT = ['recent', 'action', 'project', 'cwd', 'branch', 'focus', 'plan', 'permissionMode', 'jsonl'];
+is('redact strips every content field', true,
+  CONTENT.every((k) => !titleOnly[k] || (typeof titleOnly[k] === 'object' && !Object.keys(titleOnly[k]).length)));
+is('redact empties the agent tree but keeps its counts', [0, 0, { running: 1, total: 2, workflows: 0 }],
+  [titleOnly.tree.items.length, titleOnly.tree.all.length, titleOnly.tree.counts]);
+is('redact keeps status, cost, model, ctx and the title', ['done', 1.5, 'opus-5', 50000, 'Real title'],
+  [titleOnly.status, titleOnly.cost, titleOnly.model, titleOnly.contextTokens, titleOnly.title]);
+is('no transcript text survives in a title-only row', false,
+  /the prompt|the reply|Write the memo|Look at x|billing-api|secret-app|Bash/.test(JSON.stringify(titleOnly)));
+is('every row carries its privacy', { level: 'title', alias: false, source: 'session', ruled: false }, titleOnly.privacy);
+is('an alias becomes the display title, also on a visible row', ['Work', 'alias', 'the reply'],
+  (() => { const r = privacy.redact(prow(), { level: 'visible', alias: 'Work', source: 'none' }); return [r.title, r.titleSource, r.recent.reply]; })());
+is('an aliased title-only row hides the real title too', false,
+  JSON.stringify(privacy.redact(prow(), { level: 'title', alias: 'Work', source: 'session' })).includes('Real title'));
+
+fs.writeFileSync(privacy.FILE, '{ "global": tru', 'utf8');
+is('a corrupt privacy file reads as defaults', { global: false, sessions: {}, rules: [] }, privacy.load());
+fs.rmSync(privacy.FILE, { force: true });
+is('a missing privacy file reads as defaults', { global: false, sessions: {}, rules: [] }, privacy.load());
+
+privacy.setSession('s1', { level: 'title', alias: 'Client' });
+is('setSession writes level and alias', ['title', 'Client'],
+  [privacy.load().sessions.s1.level, privacy.load().sessions.s1.alias]);
+privacy.setSession('s1', { alias: '' });
+is('an empty alias clears it, the level stays', [undefined, 'title'],
+  [privacy.load().sessions.s1.alias, privacy.load().sessions.s1.level]);
+privacy.setSession('s1', { level: 'visible' });
+is('visible with no alias deletes the entry', false, 's1' in privacy.load().sessions);
+privacy.setSession('s1', { level: 'visible' }, { ruled: true });
+is('...unless a rule hides the session: then visible is kept as the override', 'visible',
+  (privacy.load().sessions.s1 || {}).level);
+privacy.setSession('s1', { alias: 'x'.repeat(200) });
+is('an alias is capped at 60 characters', 60, privacy.load().sessions.s1.alias.length);
+is('an unknown level is refused', null, privacy.setSession('s1', { level: 'secret' }));
+privacy.setGlobal(true);
+is('setGlobal writes private mode', true, privacy.load().global);
+privacy.addRule({ match: '  ai-influencer  ', level: 'blocked' });
+is('addRule trims and stores', [{ match: 'ai-influencer', level: 'blocked' }], privacy.load().rules);
+is('addRule refuses an empty match', null, privacy.addRule({ match: '   ', level: 'blocked' }));
+privacy.removeRule(0);
+is('removeRule drops by index', [], privacy.load().rules);
+is('applyRequest routes each body shape', [true, true, true, true, false, false],
+  [privacy.applyRequest({ sessionId: 's9', level: 'blocked' }),
+    privacy.applyRequest({ sessionId: 's9', alias: 'Nine' }),
+    privacy.applyRequest({ global: false }),
+    privacy.applyRequest({ addRule: { match: 'm', level: 'title' } }),
+    privacy.applyRequest({ sessionId: 's9', level: 'nope' }),
+    privacy.applyRequest(['global'])]);
+is('no temp file is left behind by the atomic writes', [],
+  fs.readdirSync(tmpRoot).filter((n) => n.startsWith('privacy.json.tmp')));
+// The render tests below run monitor.js with this env: start them clean.
+fs.rmSync(privacy.FILE, { force: true });
+
+// The one POST endpoint, on a real socket. Asynchronous: awaited at the end.
+const webTests = (async () => {
+  const http = require('http');
+  const net = require('net');
+  const web = require('../lib/web');
+  const port = await new Promise((done) => {
+    const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => done(p)); });
+  });
+  const got = [];
+  const server = await new Promise((done) => {
+    const s = web.start(port, () => done(s), { onPrivacy: (body) => { got.push(body); return body.global !== 'refuse'; } });
+  });
+  const post = (headers, body) => new Promise((done) => {
+    const req = http.request({ host: '127.0.0.1', port, path: '/api/privacy', method: 'POST',
+      headers: { Host: `127.0.0.1:${port}`, ...headers } }, (res) => { res.resume(); done(res.statusCode); });
+    req.on('error', () => done(0));
+    req.end(body);
+  });
+  const json = { 'Content-Type': 'application/json' };
+  const results = [
+    await post({ ...json, Origin: 'http://evil.example' }, '{"global":true}'),
+    await post({ 'Content-Type': 'text/plain' }, '{"global":true}'),
+    await post({ ...json, Host: `evil.example:${port}` }, '{"global":true}'),
+    await post(json, 'not json'),
+    await post(json, JSON.stringify({ global: 'refuse' })),
+    await post(json, JSON.stringify({ addRule: { match: 'x'.repeat(5000), level: 'title' } })),
+    await post({ ...json, Origin: `http://127.0.0.1:${port}` }, '{"global":true}'),
+    await post({ ...json, Host: `localhost:${port}` }, '{"global":false}'),
+  ];
+  const options = await new Promise((done) => {
+    const req = http.request({ host: '127.0.0.1', port, path: '/api/privacy', method: 'OPTIONS',
+      headers: { Origin: 'http://evil.example', 'Access-Control-Request-Method': 'POST' } },
+    (res) => { res.resume(); done([res.statusCode, res.headers['access-control-allow-origin'] || null]); });
+    req.end();
+  });
+  server.close();
+  return { results, handled: got.length, options };
+})();
+
 // ---------------------------------------------------------------- render
 // The real renderer on fabricated sessions, at two widths and every grouping.
 console.log('\nrender (demo)');
 const { execFileSync } = require('child_process');
 const MONITOR = path.join(__dirname, '..', 'monitor.js');
-const board = (cols, extra, lines) => execFileSync(process.execPath, [MONITOR, '--demo', '--once', ...(extra || [])], {
+const board = (cols, extra, lines, env) => execFileSync(process.execPath, [MONITOR, '--demo', '--once', ...(extra || [])], {
   encoding: 'utf8',
-  env: { ...process.env, COLUMNS: String(cols), LINES: String(lines || ''), NO_COLOR: '' },
+  env: { ...process.env, COLUMNS: String(cols), LINES: String(lines || ''), NO_COLOR: '', ...(env || {}) },
 }).replace(/\x1b\[[0-9;]*m/g, '');
 const widest = (out) => Math.max(...out.split('\n').map((l) => text.width(l)));
 
@@ -929,6 +1070,23 @@ is('a short terminal still gets every tree line, and no "+N more"', [true, false
     const out = board(100, ['--group=none'], 22);
     return [out.includes('List the cache keys') && out.includes('impl-1'), /\+\d+ more/.test(out)];
   })());
+
+// Privacy in the table: one demo session blocked, one title-only under an alias.
+const privFile = path.join(tmpRoot, 'privacy-render.json');
+fs.writeFileSync(privFile, JSON.stringify({ sessions: {
+  'b2c3d4e5-2222-4aaa-8bbb-000000000002': { level: 'blocked' },
+  'e5f6a7b8-5555-4aaa-8bbb-000000000005': { level: 'title', alias: 'Client work' },
+} }), 'utf8');
+const privOut = board(140, [], 0, { CLAUDE_MONITOR_PRIVACY: privFile });
+is('a blocked session leaves the table and the footer counts it', [false, true],
+  [privOut.includes('double-charging'), privOut.includes('1 blocked (h to manage)')]);
+is('a title-only session shows its alias, marked, with no tree and no project', [true, false, false, false],
+  [/~ Client work/.test(privOut), privOut.includes('Migrate the auth'), privOut.includes('release-checklist'),
+    /Client work.*auth-service/.test(privOut)]);
+fs.writeFileSync(privFile, JSON.stringify({ global: true }), 'utf8');
+const globalOut = board(140, [], 0, { CLAUDE_MONITOR_PRIVACY: privFile });
+is('private mode marks every row and says so in the header', [true, false, true],
+  [/~ Invoice rounding/.test(globalOut), globalOut.includes('├─ '), globalOut.split('\n')[0].includes('private')]);
 
 is('clipAnsi cuts a coloured line without breaking an escape', [5, true],
   (() => {
@@ -970,9 +1128,20 @@ const stop = configLib.watch((next) => { fired = next.theme; });
 
 fs.writeFileSync(watchTarget, JSON.stringify({ ...configLib.load(), theme: flipped }, null, 2) + '\n', 'utf8');
 
-setTimeout(() => {
+setTimeout(async () => {
   is(`editing config.json fires the watcher (${before} -> ${flipped})`, flipped, fired);
   stop();
+  console.log('\nweb: POST /api/privacy');
+  try {
+    const w = await webTests;
+    is('foreign Origin 403 · text/plain 415 · foreign Host 403 · bad JSON 400 · refused 400 · over 4 KB 400',
+      [403, 415, 403, 400, 400, 400], w.results.slice(0, 6));
+    is('own Origin and localhost Host: 204', [204, 204], w.results.slice(6));
+    is('only the accepted-looking bodies reach the handler', 3, w.handled);
+    is('a preflight gets no CORS allow header', [405, null], w.options);
+  } catch (e) {
+    is('the web POST tests run', 'no error', e.message);
+  }
   // Nothing to restore: the whole run happened inside the temp directory.
   console.log(`\n${passed} passed · ${failed} failed · fixtures in ${tmp}`);
   process.exit(failed ? 1 : 0);

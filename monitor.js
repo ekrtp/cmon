@@ -15,6 +15,7 @@
 //   cost    <- usage on every transcript line, sub-agents included (lib/cost.js)
 //   tree    <- sub-agents and workflow runs, from <session>/subagents/ (lib/subagents.js)
 //   focus   <- which project the conversation is actually about (lib/projects.js)
+//   privacy <- ~/.claude/monitor/privacy.json: hidden or title-only sessions (lib/privacy.js)
 //
 // Usage:  cmon [options]        (or `node monitor.js` if the command is not installed)
 //   --once                 render once and exit
@@ -34,10 +35,12 @@
 //   --port=4280            port for --web
 //   --demo                 fabricated sessions (screenshots, testing)
 //   --version  --help
-// Keys: t theme picker · g grouping · a agent tree on/off · Ctrl+C exit
+// Keys: t theme picker · g grouping · a agent tree on/off · h privacy picker
+//       (v visible · t title only · b block) · p private mode on/off · Ctrl+C exit
 // Environment: NO_COLOR=1 disables colour.
 //
 // Config: ~/.claude/monitor/config.json — hot-reloaded, no restart needed.
+// Privacy: ~/.claude/monitor/privacy.json — the same, shared with --web.
 
 const path = require('path');
 const registry = require('./lib/registry');
@@ -54,6 +57,7 @@ const identity = require('./lib/identity');
 const demo = require('./lib/demo');
 const subagents = require('./lib/subagents');
 const costLib = require('./lib/cost');
+const privacyLib = require('./lib/privacy');
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes('--' + name);
@@ -184,7 +188,7 @@ function glyph(status) {
 }
 
 // --- theme picker ----------------------------------------------------------
-// The only interactive thing in the tool. `t` opens a bar along the bottom;
+// One of the two pickers (the other is privacy, below). `t` opens a bar along the bottom;
 // arrows move through the themes and recolour the whole board live; enter keeps
 // the choice (written to the config), escape puts back what you had.
 const picker = { open: false, index: 0, previous: null, saved: '' };
@@ -273,14 +277,88 @@ function pickerBar(total) {
     `${start + shown.length < list.length ? paint('dim') + ' ›' + RESET : ''}  ${hint}`;
 }
 
+// --- privacy picker --------------------------------------------------------
+// `h` opens a second bar, built like the theme picker: one session at a time,
+// shown and blocked ones alike (blocked last), with its display title and level.
+// v / t / b write privacy.json at once; nothing waits for enter. Renaming is a
+// web-board thing: a text field in raw mode is not worth its weight here.
+const ppick = { open: false, id: '' };
+const LEVEL_LABEL = { visible: 'visible', title: 'title only', blocked: 'blocked' };
+
+const privacyList = (snap) => [...snap.rows, ...(snap.blocked || [])];
+
+function privacyIndex(list) {
+  const i = list.findIndex((r) => r.sessionId === ppick.id);
+  return i < 0 ? 0 : i;
+}
+
+function openPrivacy(snap) {
+  const list = privacyList(snap);
+  if (!list.length) return;
+  ppick.open = true;
+  ppick.id = list[0].sessionId;
+}
+
+function movePrivacy(snap, step) {
+  const list = privacyList(snap);
+  if (!list.length) return;
+  ppick.id = list[(privacyIndex(list) + step + list.length) % list.length].sessionId;
+}
+
+function setPrivacy(snap, level) {
+  const row = privacyList(snap).find((r) => r.sessionId === ppick.id);
+  if (!row) return;
+  try {
+    privacyLib.setSession(row.sessionId, { level }, { ruled: row.privacy && row.privacy.ruled });
+    prefs = privacyLib.load();
+  } catch (e) { /* unwritable: the board stays as it was */ }
+}
+
+function togglePrivate() {
+  try { prefs = privacyLib.setGlobal(!prefs.global); } catch (e) { /* keep the in-memory value */ }
+}
+
+function privacyBar(snap, total) {
+  const list = privacyList(snap);
+  const label = `${BOLD}${paint('accent')}privacy${RESET} `;
+  const hint = `${paint('dim')}v visible · t title only · b block · ←→ move · esc close${RESET}`;
+  if (!list.length) return `  ${label}${paint('dim')}no sessions · esc close${RESET}`;
+  const i = privacyIndex(list);
+  const row = list[i];
+  const level = row.privacy ? row.privacy.level : 'visible';
+  const count = `${paint('dim')}${i + 1}/${list.length}${RESET} `;
+  const tag = `${paint(level === 'visible' ? 'done' : level === 'title' ? 'asking' : 'interrupted')}${LEVEL_LABEL[level]}${RESET}`;
+  const room = Math.max(12, total - 22 - width(hint) - width(LEVEL_LABEL[level]) - String(list.length).length * 2);
+  return `  ${label}${count}${BOLD}${clip(row.title, room)}${RESET} ${paint('dim')}·${RESET} ${tag}  ${hint}`;
+}
+
 // --- text layout (lib/text.js: measurement, clipping, wrapping) ------------
 const { width, clip, clipAnsi, pad, wrap, ago, compactNumber, ANSI } = require('./lib/text');
 
 const shortModel = (m) => String(m || '').replace(/^claude-/, '').replace(/-\d{8}$/, '');
 
+// --- privacy ---------------------------------------------------------------
+// Loaded once, refreshed by privacyLib.watch: a table and a page running side by
+// side see each other's changes. Applied inside collect(), so a hidden field is
+// gone before anything renders, notifies or publishes.
+let prefs = privacyLib.load();
+
+// Blocked rows leave `rows` for `blocked`; title-only rows stay, redacted.
+function withPrivacy(snap) {
+  const rows = [];
+  const blocked = [];
+  for (const r of snap.rows) {
+    const out = privacyLib.redact(r, privacyLib.resolve(r, prefs));
+    (out.privacy.level === 'blocked' ? blocked : rows).push(out);
+  }
+  return { ...snap, rows, blocked };
+}
+
+const isPrivate = (row) => !!(row.privacy && row.privacy.level !== 'visible');
+
 // --- data ------------------------------------------------------------------
 function collect() {
-  if (DEMO) return demo.snapshot();
+  if (DEMO) return withPrivacy(demo.snapshot());
   const sessions = registry.liveSessions();
   const hookState = state.bySession();
 
@@ -350,7 +428,7 @@ function collect() {
     visible = visible.filter((r) => Date.now() - r.lastEvent < active.windowMs);
     stale = before - visible.length;
   }
-  return { rows: visible, hiddenEmpty: active.showEmpty ? 0 : empty.length, hiddenStale: stale };
+  return withPrivacy({ rows: visible, hiddenEmpty: active.showEmpty ? 0 : empty.length, hiddenStale: stale });
 }
 
 // --- rendering -------------------------------------------------------------
@@ -458,8 +536,8 @@ function contextPaint(row) {
 function cell(row, col) {
   switch (col) {
     case 'status': return `${glyph(row.status)} ${row.status}`;
-    case 'title': return row.title;
-    case 'project': return row.project;
+    case 'title': return isPrivate(row) ? `${PRIVATE_MARK()} ${row.title}` : row.title;
+    case 'project': return row.project || '—';
     case 'focus': {
       if (!row.focus) return '—';
       const mark = identity.glyphFor(row.focus.name, active.glyphs);
@@ -496,6 +574,8 @@ function cell(row, col) {
 // after it.
 const TREE = { mid: '├─ ', last: '└─ ', pipe: '│  ', blank: '   ' };
 const WF_MARK = () => (active.glyphs === 'emoji' ? '🧩' : 'wf');
+// Before a title-only row's title, so it never reads as an ordinary quiet row.
+const PRIVATE_MARK = () => (active.glyphs === 'emoji' ? '◌' : '~');
 // Columns a child line fills in; the title span runs up to the next of these.
 const CHILD_COLUMNS = ['status', 'time'];
 // Agent types too common to be worth a word on every line.
@@ -533,9 +613,11 @@ function groupsOf(rows) {
 
   const map = new Map();
   for (const r of rows) {
+    // A title-only row has no project or focus left to group by.
     const key = by === 'status' ? r.status
-      : by === 'focus' ? (r.focus ? r.focus.name : 'unknown')
-        : r.project;
+      : isPrivate(r) ? 'private'
+        : by === 'focus' ? (r.focus ? r.focus.name : 'unknown')
+          : r.project;
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(r);
   }
@@ -549,6 +631,7 @@ function groupsOf(rows) {
 
 function render(snapshot) {
   const { rows, hiddenEmpty, hiddenStale } = snapshot;
+  const blocked = (snapshot.blocked || []).length;
   const roomy = active.density !== 'compact';
   const gap = roomy ? 2 : 1;
   const sep = ' '.repeat(gap);
@@ -567,7 +650,8 @@ function render(snapshot) {
   out.push(`  ${BOLD}${paint('accent')}cmon${RESET}${paint('dim')} claude monitor${RESET}  ${paint('dim')}${clock} · ` +
     `${rows.length} session${rows.length === 1 ? '' : 's'} · theme ${theme.name}` +
     `${theme.fallbackFrom ? ` (unknown "${theme.fallbackFrom}", using dark)` : ''}` +
-    `${active.notifications ? ' · notify on' : ''}${RESET}`);
+    `${active.notifications ? ' · notify on' : ''}${RESET}` +
+    `${prefs.global ? `${paint('dim')} · ${RESET}${BOLD}${paint('accent')}private${RESET}` : ''}`);
   out.push('  ' + rule);
   if (roomy) out.push('');
 
@@ -576,6 +660,8 @@ function render(snapshot) {
     if (hiddenEmpty) hidden.push(`${hiddenEmpty} empty`);
     if (hiddenStale) hidden.push(`${hiddenStale} stale`);
     out.push(`  ${paint('dim')}Nothing to show${hidden.length ? ` (${hidden.join(', ')} hidden — try --all)` : ''}.${RESET}`);
+    if (blocked) out.push(`  ${paint('dim')}${blocked} blocked (h to manage)${RESET}`);
+    if (!ONCE && ppick.open) out.push(privacyBar(snapshot, total));
     return out.join('\n');
   }
 
@@ -773,12 +859,16 @@ function render(snapshot) {
   out.push(`  ${paint('dim')}titles ${Object.entries(sources).map(([k, v]) => `${k}:${v}`).join(' · ')}` +
     `${hidden.length ? ` · hidden ${hidden.join(', ')}` : ''}` +
     `${dropped.length ? ` · narrow, dropped ${dropped.join(', ')}` : ''}${RESET}`);
+  if (blocked) out.push(`  ${paint('dim')}${blocked} blocked (h to manage)${RESET}`);
   if (!ONCE) {
     if (picker.open) {
       out.push(pickerBar(total));
+    } else if (ppick.open) {
+      out.push(privacyBar(snapshot, total));
     } else {
       out.push(`  ${paint('dim')}watching · ${active.refreshMs / 1000}s refresh · grouped by ${active.groupBy}` +
-        ` · t theme · g group · a agents ${active.showAgents ? 'on' : 'off'} · Ctrl+C to exit` +
+        ` · t theme · g group · a agents ${active.showAgents ? 'on' : 'off'}` +
+        ` · h privacy · p private ${prefs.global ? 'on' : 'off'} · Ctrl+C to exit` +
         `${picker.saved ? ` · saved theme ${picker.saved}` : ''}${RESET}`);
     }
   }
@@ -817,6 +907,34 @@ const allThemes = () => themes.names().map((name) => {
   return { name, colours, light: identity.luminance(themes.hexToRgb(colours.header)) < 0.5 };
 });
 
+// Closed sessions get the same rules: session entries, folder rules, global mode.
+// There is no focus for a closed tab, so a rule can only hit its folder.
+function closedPrivacy(c) {
+  const resolved = privacyLib.resolve({ ...c, project: c.cwd ? path.basename(c.cwd) : '' }, prefs);
+  return privacyLib.redact(c, resolved);
+}
+
+// Today's events were written as they happened, possibly under a real title
+// since hidden. At publish time: a blocked session's events go, a title-only
+// session keeps only its "session finished" lines (a task subject or an agent
+// label is conversation text), and an alias replaces the stored title.
+function privateTimeline(events, known) {
+  const out = [];
+  for (const e of events || []) {
+    let seen = known.get(e.sessionId);
+    if (!seen) {
+      const r = privacyLib.resolve({ sessionId: e.sessionId, focus: e.focus ? { name: e.focus } : null }, prefs);
+      seen = { level: r.level, title: r.alias || '' };
+    }
+    if (seen.level === 'blocked') continue;
+    if (seen.level === 'visible') { out.push(seen.title ? { ...e, title: seen.title } : e); continue; }
+    if (e.type !== 'session') continue;
+    out.push({ at: e.at, type: e.type, sessionId: e.sessionId, status: e.status,
+      title: seen.title || e.title, focus: '', action: '' });
+  }
+  return out;
+}
+
 function webState(snapshot, events, closed) {
   const light = themeIsLight();
   const rows = snapshot.rows.map((r) => {
@@ -835,15 +953,35 @@ function webState(snapshot, events, closed) {
       agentCounts: tree ? tree.counts : null,
     };
   });
+  // Blocked sessions, open or closed: an id, the display title and a status are
+  // all the Hidden lane needs to offer them back.
+  const allClosed = closed || [];
+  const blockedClosed = allClosed.filter((c) => c.privacy && c.privacy.level === 'blocked');
+  const hidden = [
+    ...(snapshot.blocked || []).map((r) => ({ sessionId: r.sessionId, title: r.title, status: r.status,
+      lastEvent: r.lastEvent, privacy: r.privacy })),
+    ...blockedClosed.map((c) => ({ sessionId: c.sessionId, title: c.title, status: 'closed',
+      lastEvent: c.lastEvent, privacy: c.privacy })),
+  ];
+  // Who is what, by id, for the timeline.
+  const known = new Map();
+  for (const r of [...snapshot.rows, ...(snapshot.blocked || []), ...allClosed]) {
+    if (!r.privacy) continue;
+    const named = r.privacy.alias || r.privacy.level !== 'visible';
+    known.set(r.sessionId, { level: r.privacy.level, title: named ? r.title : '' });
+  }
   return {
     theme: { name: active.theme, colours: theme.colours, light },
     themes: allThemes(),
     rows,
-    closed: (closed || []).map(({ jsonl, ...c }) => c),
+    hidden,
+    closed: allClosed.filter((c) => !blockedClosed.includes(c)).map(({ jsonl, ...c }) => c),
     quietAfterMs: active.quietAfterMs || 0,
     hiddenEmpty: snapshot.hiddenEmpty,
     hiddenStale: snapshot.hiddenStale,
-    timeline: events,
+    timeline: privateTimeline(events, known),
+    // Rules are not secret: they name folders, and the page lists them to edit.
+    privacy: { global: prefs.global, rules: prefs.rules },
     demo: DEMO,
   };
 }
@@ -854,29 +992,43 @@ if (flag('web')) {
   const recentLib = require('./lib/recent');
   const port = Number(value('port')) || 4280;
   const runCost = (row, runId) => costLib.forRun(row.jsonl, row.sessionId, runId);
+  // sessionId -> whether a folder rule hides it, from the last tick: an explicit
+  // "visible" is kept only for those (lib/privacy.js setSession).
+  let ruled = new Map();
   const tick = () => {
     const snapshot = collect();
-    notify.forget(new Set(snapshot.rows.map((r) => r.sessionId)));
-    notify.check(snapshot.rows, active.notifications);
+    const live = [...snapshot.rows, ...snapshot.blocked];
+    notify.forget(new Set(live.map((r) => r.sessionId)));
+    notify.check(live, active.notifications);
     let closed = [];
     if (DEMO) {
-      closed = demo.closed();
+      closed = demo.closed().map(closedPrivacy);
     } else {
-      for (const r of snapshot.rows) r.recent = recentLib.info(r.jsonl);
-      closed = recentLib.closed(new Set(registry.liveSessions().map((s) => s.sessionId)));
+      // Only a visible row gets its last message and activity read at all.
+      for (const r of snapshot.rows) if (!isPrivate(r)) r.recent = recentLib.info(r.jsonl);
+      closed = recentLib.closed(new Set(registry.liveSessions().map((s) => s.sessionId))).map(closedPrivacy);
       for (const c of closed) c.recent = { replyAt: c.lastEvent };
     }
-    const events = DEMO ? demo.timeline() : timeline.observe([...snapshot.rows, ...closed], { runCost });
+    ruled = new Map([...live, ...closed].map((r) => [r.sessionId, !!(r.privacy && r.privacy.ruled)]));
+    const shown = closed.filter((c) => c.privacy.level !== 'blocked');
+    const events = DEMO ? demo.timeline() : timeline.observe([...snapshot.rows, ...shown], { runCost });
     server.publish(webState(snapshot, events, closed));
   };
   let timer = null;
+  // The page's one write: POST /api/privacy. Answer first, repaint right after,
+  // so the change comes back over the event stream like any other.
+  const onPrivacy = (body) => {
+    const ok = privacyLib.applyRequest(body, (id) => ruled.get(id));
+    if (ok) { prefs = privacyLib.load(); setImmediate(tick); }
+    return ok;
+  };
   const server = web.start(port, (url) => {
     console.log(`cmon --web  ${url}`);
     console.log('Open it in VS Code: Ctrl+Shift+P > "Simple Browser: Show" and paste the address. Ctrl+C stops.');
     // Listen first: the first cost pass reads every transcript (seconds), and the
     // page should already be showing "loading" meanwhile.
     setImmediate(() => { tick(); timer = setInterval(tick, active.refreshMs); });
-  });
+  }, { onPrivacy });
   configLib.watch((next) => {
     cfg = next;
     active = applyOverrides(cfg);
@@ -885,6 +1037,7 @@ if (flag('web')) {
     timer = setInterval(tick, active.refreshMs);
     tick();
   });
+  privacyLib.watch((next) => { prefs = next; tick(); });
   process.on('SIGINT', () => { server.close(); ccboard.close(); process.exit(0); });
 }
 
@@ -898,15 +1051,18 @@ if (flag('web')) {
   // Two clocks: data is re-read on refreshMs, the spinner advances on
   // animationMs. Animating never touches the disk — it repaints the snapshot.
   let snapshot = collect();
-  notify.check(snapshot.rows, active.notifications);
+  // Blocked rows go in too: notify keeps their status (so un-blocking one is not
+  // a "new" transition) but never sends for them.
+  const watched = (s) => [...s.rows, ...s.blocked];
+  notify.check(watched(snapshot), active.notifications);
 
   process.stdout.write('\x1b[2J\x1b[?25l');
   paintFrame(snapshot);
 
   const refresh = () => {
     snapshot = collect();
-    notify.forget(new Set(snapshot.rows.map((r) => r.sessionId)));
-    notify.check(snapshot.rows, active.notifications);
+    notify.forget(new Set(watched(snapshot).map((r) => r.sessionId)));
+    notify.check(watched(snapshot), active.notifications);
     paintFrame(snapshot);
   };
 
@@ -935,21 +1091,26 @@ if (flag('web')) {
     paintFrame(snapshot);
   });
 
+  // privacy.json changed — from this board, the page or an editor.
+  const unwatchPrivacy = privacyLib.watch((next) => { prefs = next; refresh(); });
+
   process.stdout.on('resize', () => {
     process.stdout.write('\x1b[2J');
     previousLines = 0;
     paintFrame(snapshot);
   });
 
-  // The board listens for three keys: `t` opens the theme picker, `g` cycles the
-  // grouping, `a` shows or hides the agent tree. There is no row navigation —
-  // this is a display, not a console.
+  // The board listens for five keys: `t` opens the theme picker, `g` cycles the
+  // grouping, `a` shows or hides the agent tree, `h` opens the privacy picker,
+  // `p` turns private (screen-share) mode on or off. There is no row navigation
+  // — this is a display, not a console.
   const keyboard = process.stdin.isTTY && !flag('no-input');
 
   const quit = () => {
     clearInterval(dataTimer);
     if (animTimer) clearInterval(animTimer);
     unwatch();
+    unwatchPrivacy();
     ccboard.close();
     if (keyboard) {
       try { process.stdin.setRawMode(false); } catch (e) { /* ignore */ }
@@ -968,10 +1129,29 @@ if (flag('web')) {
     process.stdin.on('data', (key) => {
       if (key === '\u0003') return quit();
 
+      if (ppick.open) {
+        // A write re-reads the sessions at once: a blocked row leaves the table now,
+        // not on the next refresh.
+        const write = (level) => { setPrivacy(snapshot, level); refresh(); };
+        switch (key) {
+          case '\u001b[C': case '\u001b[B': case 'l': case 'j': movePrivacy(snapshot, 1); break;
+          case '\u001b[D': case '\u001b[A': case 'h': case 'k': movePrivacy(snapshot, -1); break;
+          case 'v': return write('visible');
+          case 't': return write('title');
+          case 'b': return write('blocked');
+          case '\r': case '\n': case '\u001b': case 'q': ppick.open = false; break;
+          default: return;
+        }
+        paintFrame(snapshot);
+        return;
+      }
+
       if (!picker.open) {
         if (key === 't') { openPicker(); paintFrame(snapshot); }
         else if (key === 'g') { cycleGrouping(); paintFrame(snapshot); }
         else if (key === 'a') { toggleAgents(); paintFrame(snapshot); }
+        else if (key === 'h') { openPrivacy(snapshot); paintFrame(snapshot); }
+        else if (key === 'p') { togglePrivate(); refresh(); }
         else if (key === 'q') quit();
         return;
       }

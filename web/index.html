@@ -49,7 +49,8 @@
 
   /* layout ------------------------------------------------------------------ */
   main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 22px; margin-top: 18px; }
-  @media (max-width: 1100px) { main { grid-template-columns: 1fr; } }
+  main.tl-folded { grid-template-columns: minmax(0, 1fr) auto; }
+  @media (max-width: 1100px) { main, main.tl-folded { grid-template-columns: 1fr; } }
   .lane { margin-bottom: 26px; }
   .lane h2 {
     display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font: 600 11px/1 var(--sans);
@@ -57,6 +58,14 @@
   }
   .lane h2 .n { font-family: var(--mono); color: var(--fg); opacity: .7; }
   .lane h2::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  /* any lane folds to its heading; the fold is remembered in this browser */
+  .fold { display: inline-flex; align-items: center; gap: 8px; margin: 0; font: inherit; letter-spacing: inherit;
+    text-transform: inherit; color: inherit; }
+  .lane h2 .fold:hover { color: var(--fg); }
+  .fold::before { content: "▾"; font-size: 10px; width: 10px; transition: transform .15s; }
+  .folded .fold::before { transform: rotate(-90deg); }
+  .lane.folded > :not(h2) { display: none; }
+  .lane.folded { margin-bottom: 14px; }
   .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; align-items: start; }
   @media (max-width: 520px) { .cards { grid-template-columns: 1fr; } body { padding: 0 12px 24px; } }
   .empty { color: var(--dim); padding: 14px 16px; border: 1px dashed var(--line); border-radius: var(--radius); }
@@ -206,6 +215,10 @@
   @media (max-width: 1100px) { aside { position: static; max-height: none; } }
   aside header { position: static; padding: 12px 14px 10px; background: none; gap: 10px; }
   aside header h3 { margin: 0; font-size: 13px; }
+  aside header h3 .n { font: 400 12px var(--mono); color: var(--dim); }
+  aside.folded header { padding-bottom: 12px; }
+  aside.folded header .chips, aside.folded .tl { display: none; }
+  aside header h3 .n:empty, aside:not(.folded) header h3 .n { display: none; }
   aside header .chips { margin-left: auto; }
   aside .chip { cursor: pointer; }
   aside .chip.sel { color: var(--bg); background: var(--fg); border-color: var(--fg); }
@@ -220,6 +233,44 @@
   .ev .what .sub { display: block; color: var(--dim); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .ev .when { font: 11.5px var(--mono); color: var(--dim); white-space: nowrap; }
   .ev.fresh { animation: arrive .6s ease-out; }
+
+  /* privacy ----------------------------------------------------------------- */
+  .pv { position: absolute; top: 9px; right: 9px; z-index: 1; width: 24px; height: 24px; border-radius: 6px;
+    display: grid; place-items: center; color: var(--dim); opacity: .55; }
+  .card:hover .pv, .pv.on, .pv:focus-visible { opacity: 1; }
+  .pv:hover, .pv.on { color: var(--fg); background: var(--surface-2); }
+  .pv svg { width: 15px; height: 15px; }
+  .card .row1 { padding-right: 26px; }
+  .pv-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 0 14px 12px 17px; }
+  .pv-opt { font-size: 12px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); }
+  .pv-opt:hover { color: var(--fg); border-color: color-mix(in srgb, var(--fg) 25%, var(--line)); }
+  .pv-opt.sel { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+  .pv-note { color: var(--dim); font-size: 11.5px; }
+  .tag { font-size: 11px; padding: 0 7px; border-radius: 999px; color: var(--dim); background: var(--surface-2); white-space: nowrap; }
+  .card.private .title { margin-bottom: 6px; }
+  .rename {
+    display: block; width: 100%; margin: 0 0 8px; padding: 4px 8px; font: 600 14px var(--sans); color: var(--fg);
+    background: var(--bg); border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line)); border-radius: 6px; outline: none;
+  }
+  .privbtn { display: flex; align-items: center; gap: 6px; padding: 4px 11px; border-radius: 999px; font-size: 12px;
+    color: var(--dim); border: 1px solid var(--line); }
+  .privbtn:hover { color: var(--fg); }
+  .privbtn[aria-pressed="true"] { color: var(--bg); background: var(--accent); border-color: var(--accent); font-weight: 600; }
+  .privbtn svg { width: 14px; height: 14px; }
+  .hidden-list .cl .act { gap: 6px; }
+  .hidden-list .pill { justify-self: start; }
+  .rules-h { margin: 16px 0 6px; font: 600 10.5px var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+  .rules { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 4px; }
+  .rules li { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+  .rules code { font: 12px var(--mono); padding: 1px 6px; border-radius: 4px; background: var(--surface-2); }
+  .rules .x { color: var(--dim); font-size: 12px; padding: 0 4px; }
+  .rules .x:hover { color: var(--interrupted); }
+  .rule-add { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .rule-add input, .rule-add select {
+    font: 12px var(--sans); color: var(--fg); background: var(--surface); border: 1px solid var(--line);
+    border-radius: 6px; padding: 4px 8px;
+  }
+  .rule-add input { width: 220px; }
 
   footer { margin-top: 6px; color: var(--dim); font-size: 12px; }
 
@@ -236,6 +287,7 @@
   <div class="brand"><b>cmon</b><span>claude monitor</span></div>
   <div class="stats" id="stats"></div>
   <div class="spacer"></div>
+  <button class="privbtn" id="private" aria-pressed="false" title="Private mode: every card shows its title only (for screen sharing)"></button>
   <label class="theme"><span class="swatch" id="swatch"></span><select id="theme" title="theme (this page only)"></select></label>
   <div class="conn" id="conn"><i></i><span>live</span></div>
   <div class="clock num" id="clock"></div>
@@ -244,7 +296,7 @@
   <section id="board"><div class="loading">Reading transcripts… the first pass takes a few seconds.</div></section>
   <aside>
     <header>
-      <h3>Today</h3>
+      <h3><button class="fold" data-fold="today">Today <span class="n" id="today-n"></span></button></h3>
       <div class="chips" id="filters"></div>
     </header>
     <div class="tl" id="timeline"></div>
@@ -253,8 +305,11 @@
 
 <script>
 'use strict';
-// Read-only page: everything below renders the snapshot cmon sends over /events.
-// No network beyond 127.0.0.1, no storage beyond which cards you opened.
+// Everything below renders the snapshot cmon sends over /events. The one thing
+// the page writes is privacy (POST /api/privacy: a card's level or alias, private
+// mode, folder rules); hidden content is removed by cmon before it is sent, so
+// nothing here has to hide anything. No network beyond 127.0.0.1, no storage
+// beyond which cards you opened, which lanes you folded and the page's theme.
 
 const STATUS = {
   asking: 'Needs you', interrupted: 'Stopped', running: 'Running', thinking: 'Thinking', done: 'Done', idle: 'Idle',
@@ -309,6 +364,31 @@ const store = {
 };
 let picked = store.get('cmon.theme');
 
+// Folded lanes, by key. localStorage rather than sessionStorage: a lane you never
+// want to see (closed sessions, say) should stay folded across restarts.
+const folded = new Set(store.get('cmon.folded').split(',').filter(Boolean));
+// A lane's heading, as a button that folds it to that one line.
+function laneHead(key, title, n) {
+  return `<h2><button class="fold" data-fold="${key}" aria-expanded="${!folded.has(key)}">${title} <span class="n">${n}</span></button></h2>`;
+}
+const laneClass = (key) => `lane${folded.has(key) ? ' folded' : ''}`;
+// The Hidden lane starts folded the first time this browser sees it, also when a
+// fold set from before it existed is already stored; after that the set decides.
+if (!store.get('cmon.hiddenSeen')) {
+  folded.add('hidden');
+  store.set('cmon.folded', [...folded].join(','));
+  store.set('cmon.hiddenSeen', '1');
+}
+// The Today panel folds the same way; folded, it shrinks to its heading and the
+// board takes the full width.
+function applyTodayFold() {
+  const on = folded.has('today');
+  document.querySelector('aside').classList.toggle('folded', on);
+  document.querySelector('main').classList.toggle('tl-folded', on);
+  document.querySelector('[data-fold="today"]').setAttribute('aria-expanded', String(!on));
+}
+applyTodayFold();
+
 function currentTheme() {
   const list = state.themes || [];
   return (picked && list.find((t) => t.name === picked)) || state.theme;
@@ -343,6 +423,12 @@ const tool = (n) => { const m = /^mcp__(.+?)__(.+)$/.exec(n || ''); return m ? `
 // are still working — those sessions belong in the Working lane.
 function background(r) {
   if (r.status === 'running' || r.status === 'thinking') return '';
+  // A title-only card has its agent counts and nothing else.
+  if (level(r) !== 'visible') {
+    const c = r.agentCounts || {};
+    if (c.workflows) return c.workflows === 1 ? '1 workflow' : c.workflows + ' workflows';
+    return c.running ? (c.running === 1 ? '1 agent' : c.running + ' agents') : '';
+  }
   const wf = (r.workflows || []).filter((w) => w.state === 'running').length;
   const ag = (r.agents || []).filter(isLive).length;
   if (wf) return wf === 1 ? '1 workflow' : wf + ' workflows';
@@ -355,9 +441,68 @@ function liveLi(a) {
     <span class="rt">${esc(tool(a.action) || (a.status === 'thinking' ? 'thinking' : ''))}${a.lastEventMs ? ' · ' + ago(a.lastEventMs) : ''}</span></li>`;
 }
 
-function card(r) {
-  const plan = r.plan;
+// --- privacy ----------------------------------------------------------------
+const level = (r) => (r.privacy && r.privacy.level) || 'visible';
+let menuFor = '';    // the card whose privacy menu is open
+let renaming = '';   // the card whose title is a text field
+const EYE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-2.8 3.8M6.6 6.6C3.7 8.4 2 12 2 12s3.6 7 10 7a9.7 9.7 0 0 0 5.4-1.6M9.9 9.9a3 3 0 0 0 4.2 4.2M2 2l20 20"/></svg>';
+
+function pvButton(r) {
+  const on = menuFor === r.sessionId;
+  return `<button class="pv ${on ? 'on' : ''}" data-pv-menu="${esc(r.sessionId)}" aria-expanded="${on}"
+    title="Privacy: visible, title only, block, rename">${level(r) === 'visible' ? EYE : EYE_OFF}</button>`;
+}
+function pvMenu(r) {
+  if (menuFor !== r.sessionId) return '';
+  const lv = level(r);
+  const global = r.privacy && r.privacy.source === 'global';
+  const opt = (k, label) => `<button class="pv-opt ${lv === k && !global ? 'sel' : ''}" data-pv="${esc(r.sessionId)}" data-level="${k}">${label}</button>`;
+  return `<div class="pv-row">${opt('visible', 'Visible')}${opt('title', 'Title only')}${opt('blocked', 'Block')}
+    <button class="pv-opt" data-rename-start="${esc(r.sessionId)}">Rename…</button>
+    ${global ? '<span class="pv-note">private mode is on</span>' : ''}</div>`;
+}
+function tags(r) {
+  return (level(r) === 'title' ? '<span class="tag">title only</span>' : '') +
+    (r.privacy && r.privacy.alias ? '<span class="tag" title="a name you gave this card, not its real title">alias</span>' : '');
+}
+// The title, or the field that renames it: Enter saves, Esc cancels, empty clears.
+function titleEl(r) {
+  if (renaming !== r.sessionId) return `<h3 class="title">${esc(r.title)}</h3>`;
+  return `<input class="rename" data-keep="rename" data-rename="${esc(r.sessionId)}" maxlength="60"
+    value="${esc(r.privacy && r.privacy.alias ? r.title : '')}" placeholder="Name to show instead (empty: real title)">`;
+}
+function metaRow(r) {
   const ratio = r.contextTokens && r.contextLimit ? r.contextTokens / r.contextLimit : 0;
+  return `<div class="meta">
+        <span>${esc(r.model || '?')}${r.effort ? ' · ' + esc(r.effort) : ''}</span>
+        ${ratio ? `<span class="ctx" title="context window"><span class="bar"><i style="width:${Math.min(100, Math.round(ratio * 100))}%;--c:${ctxColour(ratio)}"></i></span>
+          <span class="num">${tokens(r.contextTokens)}/${tokens(r.contextLimit)}</span></span>` : ''}
+        <span class="cost" title="API-equivalent cost, sub-agents included">${money(r.cost)}</span>
+      </div>`;
+}
+// Title only: what cmon sent is all there is — status, title, model, context, cost.
+function privateCard(r) {
+  const live = r.status === 'running' || r.status === 'thinking';
+  return `<article class="card ${r.status} private" data-id="${esc(r.sessionId)}" style="--st:var(--${r.status})">
+    ${pvButton(r)}
+    <div class="head">
+      <div class="row1">
+        <span class="pill"><span class="dot" style="${live || r.status === 'asking' ? phase(1400) : ''}"></span>${STATUS[r.status] || r.status}</span>
+        ${background(r) ? `<span class="pill bg"><span class="dot" style="${phase(1400)}"></span>${background(r)}</span>` : ''}
+        ${tags(r)}
+        <span class="age" data-ago="${r.lastEvent}">${ago(r.lastEvent)}</span>
+      </div>
+      ${titleEl(r)}
+      ${metaRow(r)}
+    </div>
+    ${pvMenu(r)}
+  </article>`;
+}
+
+function card(r) {
+  if (level(r) !== 'visible') return privateCard(r);
+  const plan = r.plan;
   const live = r.status === 'running' || r.status === 'thinking';
   const doing = r.status === 'asking' ? (r.action === 'AskUserQuestion' ? 'Asked you a question' : 'Waiting for your approval' + (r.action ? `: <b>${esc(tool(r.action))}</b>` : ''))
     : live && (plan && plan.current) ? `<b>${esc(plan.current)}</b>${r.action ? ' · ' + esc(tool(r.action)) : ''}`
@@ -392,25 +537,27 @@ function card(r) {
   // A session whose own turn ended while its agents work shows the agents instead.
   const said = rc.reply && !live && !background(r) ? `<p class="said ${r.status === 'asking' ? '' : 'one'}">${esc(rc.reply)}</p>` : '';
 
+  // While its title is a text field the head is not a button: a click in the
+  // field must not fold the card, and a button cannot hold an input.
+  const head = renaming === r.sessionId ? '<div class="head">'
+    : `<button class="head" data-toggle="${esc(r.sessionId)}" aria-expanded="${open.has(r.sessionId)}">`;
   return `<article class="card ${r.status} ${open.has(r.sessionId) ? 'open' : ''}" data-id="${esc(r.sessionId)}"
       style="--st:var(--${r.status});${r.focusColour ? `--focus-d:${r.focusColour};--focus-l:${r.focusColourLight}` : ''}">
-    <button class="head" data-toggle="${esc(r.sessionId)}" aria-expanded="${open.has(r.sessionId)}">
+    ${pvButton(r)}
+    ${head}
       <div class="row1">
         <span class="pill"><span class="dot" style="${live || r.status === 'asking' ? phase(1400) : ''}"></span>${STATUS[r.status] || r.status}</span>
         ${background(r) ? `<span class="pill bg"><span class="dot" style="${phase(1400)}"></span>${background(r)} in background</span>` : ''}
         ${r.focus ? `<span class="focus"><i></i>${esc(r.focus.name)}</span>` : ''}
+        ${tags(r)}
         <span class="age" data-ago="${r.lastEvent}">${ago(r.lastEvent)}</span>
       </div>
-      <h3 class="title">${esc(r.title)}</h3>
+      ${titleEl(r)}
       ${doing ? `<div class="doing">${doing}</div>` : ''}
       ${said}
-      <div class="meta">
-        <span>${esc(r.model || '?')}${r.effort ? ' · ' + esc(r.effort) : ''}</span>
-        ${ratio ? `<span class="ctx" title="context window"><span class="bar"><i style="width:${Math.min(100, Math.round(ratio * 100))}%;--c:${ctxColour(ratio)}"></i></span>
-          <span class="num">${tokens(r.contextTokens)}/${tokens(r.contextLimit)}</span></span>` : ''}
-        <span class="cost" title="API-equivalent cost, sub-agents included">${money(r.cost)}</span>
-      </div>
-    </button>
+      ${metaRow(r)}
+    ${renaming === r.sessionId ? '</div>' : '</button>'}
+    ${pvMenu(r)}
     ${work}
     <div class="detail">${detail(r)}</div>
   </article>`;
@@ -466,19 +613,75 @@ function renderBoard() {
     : ['running', 'thinking'].includes(r.status) || background(r) ? 'work' : 'rest');
   const rows = state.rows.filter((r) => !quiet(r));
   const quietRows = state.rows.filter(quiet);
-  $('board').innerHTML = LANES.map((l) => {
-    const list = rows.filter((r) => lane(r) === l.key);
-    if (!list.length && !l.none) return '';
-    return `<div class="lane"><h2>${l.title} <span class="n">${list.length}</span></h2>
-      ${list.length ? `<div class="cards">${list.map(card).join('')}</div>` : `<div class="empty">${l.none}</div>`}</div>`;
-  }).join('') + quietLane(quietRows) + closedLane() + footer();
+  keepInputs(() => {
+    $('board').innerHTML = LANES.map((l) => {
+      const list = rows.filter((r) => lane(r) === l.key);
+      if (!list.length && !l.none) return '';
+      return `<div class="${laneClass(l.key)}">${laneHead(l.key, l.title, list.length)}
+        ${list.length ? `<div class="cards">${list.map(card).join('')}</div>` : `<div class="empty">${l.none}</div>`}</div>`;
+    }).join('') + quietLane(quietRows) + closedLane() + hiddenLane() + footer();
+  });
+}
+
+// A snapshot can arrive while you type a name or a rule; the board is redrawn
+// from scratch, so what is in a [data-keep] field (and its cursor) is carried over.
+function keepInputs(draw) {
+  const kept = [...document.querySelectorAll('[data-keep]')].map((el) => ({
+    key: el.dataset.keep, value: el.value, focus: document.activeElement === el,
+    start: el.selectionStart, end: el.selectionEnd,
+  }));
+  draw();
+  for (const k of kept) {
+    const el = document.querySelector(`[data-keep="${k.key}"]`);
+    if (!el) continue;
+    el.value = k.value;
+    if (k.focus) { el.focus(); try { el.setSelectionRange(k.start, k.end); } catch (e) { /* select */ } }
+  }
+}
+
+// Blocked sessions, open or closed, and the folder rules. Folded until you open it.
+function hiddenLane() {
+  const list = state.hidden || [];
+  const p = state.privacy || { rules: [] };
+  const rules = p.rules || [];
+  const label = { title: 'title only', blocked: 'blocked' };
+  return `<div class="${laneClass('hidden')}">${laneHead('hidden', 'Hidden', list.length)}
+    <p class="hint">Blocked sessions stay off the board and out of Today, and never notify. Show one to put it back.</p>
+    ${list.length ? `<div class="closed hidden-list">${list.map((h) => `<div class="cl">
+      <span class="tt">${esc(h.title)}${h.privacy && h.privacy.alias ? '<small>alias</small>' : ''}${h.privacy && h.privacy.source === 'rule' ? '<small>by rule</small>' : ''}</span>
+      <span class="sub"><span class="pill" style="--st:var(--${h.status === 'closed' ? 'idle' : esc(h.status)})"><span class="dot"></span>${h.status === 'closed' ? 'Closed' : (STATUS[h.status] || esc(h.status))}</span></span>
+      <span class="act"><button class="btn" data-pv="${esc(h.sessionId)}" data-level="visible">Show</button>
+        <button class="btn" data-pv="${esc(h.sessionId)}" data-level="title">Title only</button></span>
+    </div>`).join('')}</div>` : '<div class="empty">Nothing is blocked.</div>'}
+    <h4 class="rules-h">Rules</h4>
+    <p class="hint">Every session whose project or folder contains the text starts hidden. A card's own setting wins over a rule.</p>
+    ${rules.length ? `<ul class="rules">${rules.map((r, i) => `<li><code>${esc(r.match)}</code> → ${label[r.level] || esc(r.level)}
+      <button class="x" data-rule-del="${i}" title="remove this rule">✕</button></li>`).join('')}</ul>` : ''}
+    <form class="rule-add" id="rule-add">
+      <input data-keep="rule-match" name="match" maxlength="80" placeholder="project or folder name" autocomplete="off">
+      <select data-keep="rule-level" name="level"><option value="blocked">block</option><option value="title">title only</option></select>
+      <button class="btn" type="submit">Add</button>
+    </form></div>`;
+}
+
+// The page's only write. The change comes back with the next snapshot.
+function send(body) {
+  return fetch('/api/privacy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    .then((r) => r.ok).catch(() => false);
+}
+
+function renderPrivate() {
+  const on = !!(state.privacy && state.privacy.global);
+  const b = $('private');
+  b.setAttribute('aria-pressed', String(on));
+  b.innerHTML = `${on ? EYE_OFF : EYE}<span>Private</span>`;
 }
 
 // Open tabs left alone for a while: one line each; click one for its full card.
 function quietLane(list) {
   if (!list.length) return '';
   const expanded = list.filter((r) => open.has(r.sessionId));
-  return `<div class="lane"><h2>Open, untouched for over ${dur(state.quietAfterMs)} <span class="n">${list.length}</span></h2>
+  return `<div class="${laneClass('quiet')}">${laneHead('quiet', `Open, untouched for over ${dur(state.quietAfterMs)}`, list.length)}
     ${expanded.length ? `<div class="cards" style="margin-bottom:8px">${expanded.map(card).join('')}</div>` : ''}
     <div class="quiet">${list.filter((r) => !open.has(r.sessionId)).map((r) => `<div class="cl" data-toggle="${esc(r.sessionId)}"
         style="${r.focusColour ? `--focus-d:${r.focusColour};--focus-l:${r.focusColourLight}` : ''}">
@@ -494,10 +697,10 @@ function closedLane() {
   const list = state.closed || [];
   if (!list.length) return '';
   const resume = (c) => (c.cwd ? `cd "${c.cwd}"; ` : '') + `claude --resume ${c.sessionId}`;
-  return `<div class="lane"><h2>Closed recently <span class="n">${list.length}</span></h2>
+  return `<div class="${laneClass('closed')}">${laneHead('closed', 'Closed recently', list.length)}
     <p class="hint">Not open in any window, active in the last 3 days. Reopen one from the Claude panel's session history in VS Code, or paste the copied line into a terminal.</p>
     <div class="closed">${list.map((c) => `<div class="cl">
-      <span class="tt">${esc(c.title)}${c.cwd ? `<small>${esc(c.cwd.split(/[\\/]/).pop())}</small>` : ''}</span>
+      <span class="tt">${esc(c.title)}${c.cwd ? `<small>${esc(c.cwd.split(/[\\/]/).pop())}</small>` : ''}${level(c) === 'title' ? '<small>title only</small>' : ''}</span>
       <span class="sub">${c.lastPrompt ? 'You: “' + esc(c.lastPrompt) + '”' : esc(c.reply)}</span>
       <span class="act"><span class="when" title="${new Date(c.lastEvent).toLocaleString()}">${ago(c.lastEvent)} ago</span>
         <button class="btn" data-copy="${esc(resume(c))}" title="${esc(resume(c))}">Copy resume</button></span>
@@ -530,6 +733,7 @@ function renderFilters() {
   const counts = { all: 0 };
   for (const e of collapse(state.timeline || [])) { counts.all++; counts[e.type] = (counts[e.type] || 0) + 1; }
   const keys = ['all', 'session', 'workflow', 'task', 'agent'].filter((k) => k === 'all' || counts[k]);
+  $('today-n').textContent = counts.all || '';
   $('filters').innerHTML = keys.map((k) => `<button class="chip ${filter === k ? 'sel' : ''}" data-filter="${k}">${k === 'all' ? 'All' : EV[k].label + 's'} ${counts[k] || 0}</button>`).join('');
 }
 
@@ -588,6 +792,7 @@ function render() {
   if (!state || !state.rows) return;
   applyTheme(currentTheme());
   renderThemePicker();
+  renderPrivate();
   renderStats();
   renderBoard();
   renderFilters();
@@ -621,8 +826,37 @@ document.addEventListener('click', (ev) => {
     navigator.clipboard ? navigator.clipboard.writeText(text).then(done, fallback) : fallback();
     return;
   }
+  const fold = ev.target.closest('[data-fold]');
+  if (fold) {
+    const key = fold.dataset.fold;
+    folded.has(key) ? folded.delete(key) : folded.add(key);
+    store.set('cmon.folded', [...folded].join(','));
+    key === 'today' ? applyTodayFold() : renderBoard();
+    return;
+  }
   const f = ev.target.closest('[data-filter]');
   if (f) { filter = f.dataset.filter; renderFilters(); renderTimeline(); return; }
+  // privacy: the eye opens a card's menu; a level, rename, rule or private mode writes
+  const menu = ev.target.closest('[data-pv-menu]');
+  if (menu) {
+    menuFor = menuFor === menu.dataset.pvMenu ? '' : menu.dataset.pvMenu;
+    renderBoard();
+    return;
+  }
+  const pv = ev.target.closest('[data-pv]');
+  if (pv) { menuFor = ''; send({ sessionId: pv.dataset.pv, level: pv.dataset.level }); return; }
+  const rn = ev.target.closest('[data-rename-start]');
+  if (rn) {
+    menuFor = '';
+    renaming = rn.dataset.renameStart;
+    renderBoard();
+    const field = document.querySelector('.rename');
+    if (field) field.focus();
+    return;
+  }
+  const del = ev.target.closest('[data-rule-del]');
+  if (del) { send({ removeRule: Number(del.dataset.ruleDel) }); return; }
+  if (ev.target.closest('#private')) { send({ global: !(state && state.privacy && state.privacy.global) }); return; }
   const t = ev.target.closest('[data-toggle]');
   if (t) {
     const id = t.dataset.toggle;
@@ -631,6 +865,31 @@ document.addEventListener('click', (ev) => {
     // Re-render rather than toggle a class: a quiet row turns into a card and back.
     render();
   }
+});
+
+// Renaming: Enter saves (empty clears the alias), Esc puts the title back.
+document.addEventListener('keydown', (ev) => {
+  const field = ev.target.closest && ev.target.closest('.rename');
+  if (!field) return;
+  if (ev.key === 'Enter') {
+    ev.preventDefault();
+    send({ sessionId: field.dataset.rename, alias: field.value.trim() });
+    renaming = '';
+    renderBoard();
+  } else if (ev.key === 'Escape') {
+    renaming = '';
+    renderBoard();
+  }
+});
+
+document.addEventListener('submit', (ev) => {
+  const form = ev.target.closest('#rule-add');
+  if (!form) return;
+  ev.preventDefault();
+  const match = form.elements.match.value.trim();
+  if (!match) return;
+  send({ addRule: { match, level: form.elements.level.value } });
+  form.elements.match.value = '';
 });
 
 $('theme').addEventListener('change', (ev) => {
