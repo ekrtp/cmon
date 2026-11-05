@@ -61,14 +61,23 @@
   .meter .win { color: var(--dim); font-size: 12px; }
   .meter .val { margin-left: auto; font-size: 20px; font-weight: 700; line-height: 1; color: var(--c); }
   .meter .val small { margin-left: 2px; font-size: 12px; font-weight: 400; color: var(--dim); }
-  .segs { display: flex; gap: 2px; height: 12px; margin: 6px 0 5px; }
-  .segs i { flex: 1; border-radius: 1px; background: var(--surface-2); }
-  .segs i.on { background: var(--c); }
-  .segs i.over { background: color-mix(in srgb, var(--interrupted) 38%, var(--surface-2)); }
-  .segs i.hit { animation: hit .9s ease-out; }
-  .segs i.gain { animation: gain .5s ease-out backwards; animation-delay: calc(var(--i, 0) * 25ms); }
+  /* Ten emoji worth 10 each. A spent glyph sits underneath in grey and the live one
+     lies over it, cut from the right by --f, so an icon can be part full. The cell
+     is sized to the column (10 x 1.2em always fits) so the cut lands on the glyph. */
+  .meter { container-type: inline-size; }
+  .icons { display: flex; justify-content: space-between; margin: 5px 0 4px; line-height: 1.25;
+    font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
+    font-size: min(20px, 8.2cqw); font-style: normal; }
+  .icons i { position: relative; display: block; width: 1.2em; height: 1.25em; font-style: normal; text-align: center; }
+  .icons i::before, .icons i::after { content: attr(data-g); position: absolute; inset: 0; }
+  .icons i::before { filter: grayscale(1) opacity(.2); }
+  .icons i::after { clip-path: inset(0 calc(100% - var(--f, 0%)) 0 0); }
+  /* spent beyond the week's pace: chip damage, still red-hot */
+  .icons i.over::before { filter: grayscale(1) sepia(1) saturate(6) hue-rotate(-45deg) opacity(.55); }
+  .icons i.hit { animation: hit .7s ease-out; }
+  .icons i.gain { animation: gain .5s ease-out backwards; animation-delay: calc(var(--i, 0) * 40ms); }
   .meter .sub { color: var(--dim); font-size: 12px; }
-  .meter.crit .val, .meter.crit .segs i.on { animation: blink 1.4s infinite; }
+  .meter.crit .val, .meter.crit .icons i::after { animation: blink 1.4s infinite; }
   .hud-st { align-self: center; min-width: 0; }
   .hud-st b { display: block; font-size: 13px; font-weight: 600; color: var(--sc, var(--dim)); }
   .hud-st small { display: block; color: var(--dim); font-size: 12px; }
@@ -304,8 +313,9 @@
   @keyframes ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--asking) 70%, transparent); }
     100% { box-shadow: 0 0 0 7px transparent; } }
   @keyframes blink { 50% { opacity: .2; } }
-  @keyframes hit { from { background: var(--interrupted); } }
-  @keyframes gain { from { transform: scale(.4); opacity: 0; } }
+  @keyframes hit { 0% { transform: scale(1.35); } 25% { transform: translateX(-3px); } 50% { transform: translateX(3px); }
+    75% { transform: translateX(-1px); } }
+  @keyframes gain { from { transform: scale(.3); opacity: 0; } 70% { transform: scale(1.25); opacity: 1; } }
   @keyframes arrive { from { background: color-mix(in srgb, var(--accent) 18%, transparent); } }
   @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
 </style>
@@ -784,30 +794,35 @@ function hudAccountText(u) {
   return text && text !== 'now' ? `${base} · data ${text} old` : `${base} · old data`;
 }
 
-// Segments that just turned off flash (hit), segments that just turned on pop in
-// (gain). The first draw, and a meter that was not there before, stay still.
+// Icons that just lost some shake (hit), icons that just gained some pop in (gain).
+// The first draw, and a meter that was not there before, stay still.
 let hudDrawn;
 let hudFilled = new Map();
+const iconFill = (left, k) => Math.max(0, Math.min(10, left - k * 10)) * 10;
 function meterHtml(m, before) {
-  const filled = Math.round(m.left / 5);
-  const pace = m.expectedLeft != null && m.expectedLeft > m.left ? Math.round(m.expectedLeft / 5) : 0;
+  // At zero the pace no longer matters, and tinted icons would read as life left.
+  const pace = m.left > 0 && m.expectedLeft != null && m.expectedLeft > m.left ? m.expectedLeft : 0;
   const was = before.get(m.key);
-  let segs = '';
-  for (let k = 0; k < 20; k++) {
+  let gained = 0;
+  let icons = '';
+  for (let k = 0; k < 10; k++) {
+    const f = iconFill(m.left, k);
     const cls = [];
-    if (k < filled) { cls.push('on'); if (was != null && k >= was) cls.push('gain'); }
-    else { if (k < pace) cls.push('over'); if (was != null && k < was) cls.push('hit'); }
-    segs += `<i${cls.length ? ` class="${cls.join(' ')}"` : ''}${was != null && k >= was ? ` style="--i:${k - was}"` : ''}></i>`;
+    if (f < 100 && k * 10 < pace) cls.push('over');
+    if (was != null && f < iconFill(was, k)) cls.push('hit');
+    const gain = was != null && f > iconFill(was, k);
+    if (gain) cls.push('gain');
+    icons += `<i data-g="${esc(m.icon)}"${cls.length ? ` class="${cls.join(' ')}"` : ''} style="--f:${f}%${gain ? `;--i:${gained++}` : ''}"></i>`;
   }
   const verb = m.key === 'hp' ? 'Respawns in' : 'Refills in';
   const sub = m.resetsAt ? `${verb} <span data-until="${m.resetsAt}">${untilText(m.resetsAt)}</span>` : (m.left === 100 ? 'Full' : '');
-  const over = m.expectedLeft != null && m.expectedLeft > m.left ? ` · ${m.expectedLeft - m.left} over pace` : '';
+  const over = pace ? ` · ${pace - m.left} over pace` : '';
   const what = m.key === 'stamina' ? '5-hour limit' : m.key === 'hp' ? 'Weekly limit' : `${m.label} weekly limit`;
   return `<div class="meter ${m.left > 0 && m.left <= 10 ? 'crit' : ''}" style="--c:${hudColour(m.left)}" role="meter"
       aria-valuenow="${m.left}" aria-valuemin="0" aria-valuemax="100" aria-label="${esc(m.label)}, ${m.left} of 100 left"
       title="${esc(what)}: ${m.pct}% used, ${m.left}% left">
     <div class="top"><b>${esc(m.label)}</b><span class="win">${esc(m.window)}</span><span class="val">${m.left}<small>/100</small></span></div>
-    <div class="segs">${segs}</div>
+    <div class="icons">${icons}</div>
     <div class="sub">${sub}${over}</div>
   </div>`;
 }
@@ -824,7 +839,7 @@ function renderUsage() {
     `<div class="hud-st"><b id="hud-status" style="--sc:${HUD_VERDICT[u.status && u.status.kind] || 'var(--dim)'}">${esc(hudStatusText(u))}</b>
       <small id="hud-acct">${esc(hudAccountText(u))}</small></div>`;
   el.hidden = false;
-  hudFilled = new Map(u.meters.map((m) => [m.key, Math.round(m.left / 5)]));
+  hudFilled = new Map(u.meters.map((m) => [m.key, m.left]));
 }
 
 // Countdowns and the verdict move with the clock between snapshots.

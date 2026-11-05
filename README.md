@@ -61,20 +61,23 @@ grouping, `a` to show or hide the agent tree, `h` and `p` for [privacy](#privacy
 The top of both boards shows what is **left** of your plan limits, as a game HUD:
 
 ```text
-  STA ███████░░░ 70 4h 9m   HP █████░░░░░ 46 4d 16h   Fable ██████████ 100 4d 16h   HP runs out Sat 21:53 at this pace
+  ⚡⚡⚡⚡· 70 4h 9m   ❤️❤️❤️· · 46 4d 16h   📖📖📖📖📖 100 4d 16h   HP runs out Sat 21:53 at this pace
 ```
 
-| Name | What it is |
-|---|---|
-| **Stamina** (`STA`) | the 5-hour limit |
-| **HP** | the weekly limit |
-| a model name (e.g. `Fable`) | that model's own weekly limit |
+| Icon | Name | What it is |
+|---|---|---|
+| ⚡ | **Stamina** | the 5-hour limit |
+| ❤️ | **HP** | the weekly limit |
+| 📖 | **Fable** | that model's own weekly limit (✨ for any other model) |
 
-Each bar is 100 minus what you used, with the time until it refills beside it.
-Green above 50, amber above 20, red below; the last 10 percent blink on the page. On the
-page, the segments between what is left and what the week's pace allowed show as
-a darker block ("21 over pace"), and a short verdict says whether the pace will
-last to the reset. Only the active account is shown.
+Each meter is 100 minus what you used, with the time until it refills beside it.
+The number is green above 50, amber above 20, red below. The page draws ten icons
+worth 10 each that empty partway, like hearts in an old adventure game, and blinks
+the last 10; the table draws five worth 20 each. On the page, the icons between what
+is left and what the week's pace allowed are tinted red ("21 over pace"), and a short
+verdict says whether the pace will last to the reset. Only the active account is
+shown. The icons are colour emoji, so the terminal needs a font and console that
+draw them (Windows Terminal does, the legacy console does not).
 
 The numbers come from the `cswap` (claude-swap) CLI, via `cswap list --json`, asked once a minute. cmon holds no token and makes no
 network call itself; if `cswap` is installed, *it* polls Anthropic's usage

@@ -1072,9 +1072,11 @@ const parsed = usageLib.parse(cswapSample(), U_NOW);
 is('parse: the active account, three meters, what is left',
   [1, false, ['stamina', 'hp', 'scoped:Fable'], ['Stamina', 'HP', 'Fable'], [70, 46, 100]],
   [parsed.account, parsed.stale, parsed.meters.map((m) => m.key), parsed.meters.map((m) => m.label), parsed.meters.map((m) => m.left)]);
-is('parse: the short names and windows the table uses',
-  [['STA', 'HP', 'Fable'], ['5h', 'week', 'week']],
-  [parsed.meters.map((m) => m.short), parsed.meters.map((m) => m.window)]);
+is('parse: the icons and windows the boards use',
+  [['⚡', '❤️', '📖'], ['5h', 'week', 'week']],
+  [parsed.meters.map((m) => m.icon), parsed.meters.map((m) => m.window)]);
+is('parse: a scoped model without its own icon gets the sparkle', '✨',
+  usageLib.parse({ accounts: [{ active: true, usage: { scoped: [{ name: 'Nova', pct: 5 }] } }] }, 0).meters[0].icon);
 is('parse: expectedLeft is 100 - expectedPct, null where cswap gave none',
   [null, 67, 67], parsed.meters.map((m) => m.expectedLeft));
 is('parse: runsOutAt only where the pace will not last', [null, Date.parse('2026-11-07T18:53:39Z'), null],
@@ -1253,19 +1255,21 @@ is('private mode marks every row and says so in the header', [true, false, true]
   [/~ Invoice rounding/.test(globalOut), globalOut.includes('├─ '), globalOut.split('\n')[0].includes('private')]);
 
 // The usage line: under the brand, inside every width, and absent without cswap.
-const usageRow = (out) => out.split('\n').find((l) => l.includes('STA ')) || '';
+const usageRow = (out) => out.split('\n').find((l) => l.includes('⚡')) || '';
 is('the demo board carries the usage line right under the brand', [true, true, true],
-  (() => { const l = board(120).split('\n'); return [l[0].includes('cmon'), /STA .*HP /.test(l[1]), l[2].startsWith('  ─')]; })());
+  (() => { const l = board(120).split('\n'); return [l[0].includes('cmon'), /⚡.*❤️/.test(l[1]), l[2].startsWith('  ─')]; })());
+is('one icon per started 20, the spent ones as dots: 70 and 46 left', [true, true],
+  (() => { const l = usageRow(board(120)).replace(text.ANSI, ''); return [l.includes('⚡⚡⚡⚡·  70'), l.includes('❤️❤️❤️· ·  46')]; })());
 is('the usage line fits every width, and the whole frame still does', true,
   [60, 70, 80, 100, 120, 160].every((cols) => {
     const out = board(cols);
     return text.width(usageRow(out)) > 0 && text.width(usageRow(out)) <= cols - 2 && widest(out) <= cols;
   }));
 is('at 100 columns it keeps both meters and the verdict, at 60 only the meters', [true, false, true],
-  (() => { const a = usageRow(board(100)); const b = usageRow(board(60)); return [/HP runs out/.test(a), /HP runs out/.test(b), /STA .*HP /.test(b)]; })());
+  (() => { const a = usageRow(board(100)); const b = usageRow(board(60)); return [/HP runs out/.test(a), /HP runs out/.test(b), /⚡.*❤️/.test(b)]; })());
 is('without cswap a live (non-demo) board has no usage line', false,
   execFileSync(process.execPath, [MONITOR, '--once'], { encoding: 'utf8', env: { ...process.env, COLUMNS: '100', NO_COLOR: '1' } })
-    .includes('STA '));
+    .includes('⚡'));
 
 is('clipAnsi cuts a coloured line without breaking an escape', [5, true],
   (() => {

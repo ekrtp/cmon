@@ -635,9 +635,11 @@ function groupsOf(rows) {
 }
 
 // --- usage bar -------------------------------------------------------------
-// One line under the brand: what is LEFT of the 5-hour limit (STA), the weekly
-// limit (HP) and any model-scoped weekly limit, plus a one-line verdict. Falls
-// back to fewer pieces rather than running past the terminal edge.
+// One line under the brand: what is LEFT of the 5-hour limit (⚡), the weekly
+// limit (❤️) and any model-scoped weekly limit, plus a one-line verdict. Five
+// icons per meter, each worth 20 and shown while any of it remains; a spent one
+// is a dim two-cell dot, so the emoji keep their width. Falls back to fewer
+// pieces rather than running past the terminal edge.
 const usageColour = (left) => paint(left > 50 ? 'done' : left > 20 ? 'asking' : 'interrupted');
 const STATUS_ROLE = { steady: 'dim', low: 'asking', burning: 'asking', ko: 'interrupted', winded: 'interrupted', drained: 'interrupted' };
 const usageTime = (ms) => new Date(ms).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' }).replace(',', '');
@@ -648,10 +650,10 @@ function usageLine(total) {
   const now = Date.now();
 
   const meter = (m, countdown) => {
-    const cells = Math.round(m.left / 10);
+    const icons = Math.ceil(m.left / 20);
     const c = usageColour(m.left);
     const wait = countdown && m.resetsAt ? ` ${paint('dim')}${usage.until(m.resetsAt, now)}${RESET}` : '';
-    return `${BOLD}${m.short}${RESET} ${c}${'█'.repeat(cells)}${RESET}${paint('dim')}${'░'.repeat(10 - cells)}${RESET} ` +
+    return `${m.icon.repeat(icons)}${paint('dim')}${'· '.repeat(5 - icons)}${RESET} ` +
       `${c}${m.left}${RESET}${wait}`;
   };
   const verdict = () => {

@@ -10,8 +10,9 @@ is the two commits at the bottom.
   5-hour limit as **Stamina**, the weekly limit as **HP** and any model's weekly
   limit (Fable, say) as an extra meter, each showing what is left with its
   refill time, plus a one-line verdict (`HP runs out Sat 21:53 at this pace`).
-  The page draws 20-segment bars, marks the segments spent beyond the week's
-  pace, blinks the last 10 and flashes segments as they drain or refill.
+  Emoji meters: ⚡ Stamina, ❤️ HP, 📖 Fable (✨ for other models). The page draws
+  ten icons that empty partway, tints the ones spent beyond the week's pace,
+  blinks the last 10 and shakes or pops icons as they drain or refill.
 - The numbers come from `cswap list --json`, once a minute, active account only.
   cmon holds no token and makes no network call itself; without `cswap` the bar
   is not drawn, and `"usage": false` stops cmon from running it.
