@@ -14,6 +14,9 @@ const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-monitor-test-'));
 process.env.CLAUDE_MONITOR_CONFIG = path.join(tmpRoot, 'config.json');
 // Same for lib/privacy: a test that blocks a session must not hide it on your board.
 process.env.CLAUDE_MONITOR_PRIVACY = path.join(tmpRoot, 'privacy.json');
+// And for lib/usage: a test run never calls the real cswap (monitor.js child
+// processes inherit this too).
+process.env.CLAUDE_MONITOR_CSWAP = 'off';
 
 const titles = require('../lib/titles');
 const statusLib = require('../lib/status');
@@ -1034,6 +1037,167 @@ const webTests = (async () => {
   return { results, handled: got.length, options };
 })();
 
+// ---------------------------------------------------------------- usage bar
+// lib/usage.js on a fixture shaped like `cswap list --json`. Nothing here runs cswap.
+console.log('\nusage bar (cswap)');
+const usageLib = require('../lib/usage');
+const demoLib = require('../lib/demo');
+const U_NOW = Date.parse('2026-11-05T20:02:00Z');
+const iso = (ms) => new Date(ms).toISOString();
+
+const cswapSample = () => ({
+  schemaVersion: 1, activeAccountNumber: 1,
+  accounts: [
+    { number: 1, email: 'a@b.c', organizationName: "a@b.c's Organization", organizationUuid: 'aaaa-bbbb', isOrganization: true,
+      active: true, usageStatus: 'ok',
+      usage: {
+        fiveHour: { pct: 30, resetsAt: '2026-11-06T00:10:00.213598+00:00', countdown: '4h 8m', clock: 'Nov 6 03:10' },
+        sevenDay: { pct: 54, resetsAt: '2026-11-10T13:00:00.213618+00:00', countdown: '4d 16h', clock: 'Nov 10 16:00',
+          expectedPct: 32.8, aheadOfPace: true, projectedExhaustionAt: '2026-11-07T18:53:39Z', willLastToReset: false },
+        scoped: [{ pct: 0, resetsAt: '2026-11-10T13:00:00+00:00', countdown: '4d 16h', clock: 'Nov 10 16:00',
+          expectedPct: 32.8, aheadOfPace: false, willLastToReset: true, name: 'Fable' }],
+      },
+      usageFetchedAt: '2026-11-05T20:01:22Z', usageAgeSeconds: 0 },
+    { number: 2, email: 'd@e.f', active: false, usageStatus: 'unavailable', usage: null,
+      lastGoodUsage: { fiveHour: { pct: 0 }, sevenDay: { pct: 100, resetsAt: '2026-11-02T15:59:59.569036+00:00', expectedPct: 87,
+        aheadOfPace: false, projectedExhaustionAt: '2026-11-01T18:14:29Z', willLastToReset: false } },
+      lastGoodFetchedAt: '2026-11-01T18:14:29Z', lastGoodAgeSeconds: 352013.3 },
+  ],
+  unclaimedCredentials: [],
+});
+// The sample with its active account's usage edited.
+const cswapWith = (edit) => { const j = cswapSample(); edit(j.accounts[0].usage, j.accounts[0], j); return j; };
+const parsed = usageLib.parse(cswapSample(), U_NOW);
+
+is('parse: the active account, three meters, what is left',
+  [1, false, ['stamina', 'hp', 'scoped:Fable'], ['Stamina', 'HP', 'Fable'], [70, 46, 100]],
+  [parsed.account, parsed.stale, parsed.meters.map((m) => m.key), parsed.meters.map((m) => m.label), parsed.meters.map((m) => m.left)]);
+is('parse: the short names and windows the table uses',
+  [['STA', 'HP', 'Fable'], ['5h', 'week', 'week']],
+  [parsed.meters.map((m) => m.short), parsed.meters.map((m) => m.window)]);
+is('parse: expectedLeft is 100 - expectedPct, null where cswap gave none',
+  [null, 67, 67], parsed.meters.map((m) => m.expectedLeft));
+is('parse: runsOutAt only where the pace will not last', [null, Date.parse('2026-11-07T18:53:39Z'), null],
+  parsed.meters.map((m) => m.runsOutAt));
+is('parse: reset times in ms, fetched time kept',
+  [Date.parse('2026-11-06T00:10:00.213598+00:00'), Date.parse('2026-11-05T20:01:22Z')],
+  [parsed.meters[0].resetsAt, parsed.fetchedAt]);
+is('parse: no email or organization anywhere in the result', false,
+  /@|organization|aaaa-bbbb/i.test(JSON.stringify(parsed)));
+is('parse: the status of the sample is HP burning', { kind: 'burning', label: 'HP', at: Date.parse('2026-11-07T18:53:39Z') }, parsed.status);
+
+is('an active account with usage:null falls back to lastGood, stale',
+  [2, true, [0, 0], true],
+  (() => {
+    const j = cswapSample();
+    j.accounts[0].active = false; j.accounts[1].active = true; j.activeAccountNumber = 2;
+    const r = usageLib.parse(j, U_NOW);
+    // lastGood's week reset (Nov 2) is long past: refilled, not 100% used.
+    return [r.account, r.stale, [r.meters[0].pct, r.meters[1].pct], r.fetchedAt === Date.parse('2026-11-01T18:14:29Z')];
+  })());
+is('with no active flag, activeAccountNumber picks the account', 2,
+  usageLib.parse({ activeAccountNumber: 2, accounts: [
+    { number: 1, usage: { fiveHour: { pct: 1 } } }, { number: 2, usage: { fiveHour: { pct: 2 } } }] }, U_NOW).account);
+is('no active account: null', null,
+  usageLib.parse({ activeAccountNumber: 9, accounts: [{ number: 1, active: false, usage: { fiveHour: { pct: 1 } } }] }, U_NOW));
+
+is('a past resetsAt is a refilled window', [100, null, null, null],
+  (() => {
+    const r = usageLib.parse(cswapWith((u) => { u.sevenDay.resetsAt = iso(U_NOW - 1000); }), U_NOW).meters[1];
+    return [r.left, r.resetsAt, r.expectedLeft, r.runsOutAt];
+  })());
+is('a past projectedExhaustionAt is no run-out', null,
+  usageLib.parse(cswapWith((u) => { u.sevenDay.projectedExhaustionAt = iso(U_NOW - 1000); }), U_NOW).meters[1].runsOutAt);
+is('willLastToReset:true is no run-out either', null,
+  usageLib.parse(cswapWith((u) => { u.sevenDay.willLastToReset = true; }), U_NOW).meters[1].runsOutAt);
+is('pct is rounded and clamped to 0-100', [34, 100, 0],
+  [33.6, 140, -5].map((p) => usageLib.parse(cswapWith((u) => { u.fiveHour.pct = p; }), U_NOW).meters[0].pct));
+
+// Every status kind, with its sentence, and who wins.
+const kind = (edit) => usageLib.parse(cswapWith(edit), U_NOW);
+const say = (r) => usageLib.statusText(r, U_NOW, () => 'Sat 21:53');
+const calm = (u) => { u.sevenDay.willLastToReset = true; u.sevenDay.pct = 30; };
+let r = kind((u) => { u.sevenDay.pct = 100; });
+is('ko: HP at zero', ['ko', 'K.O. HP respawns in 4d 16h'], [r.status.kind, say(r)]);
+r = kind((u) => { calm(u); u.fiveHour.pct = 100; u.fiveHour.resetsAt = iso(U_NOW + 12 * 60000); });
+is('winded: Stamina at zero', ['winded', 'Out of stamina, back in 12m'], [r.status.kind, say(r)]);
+r = kind((u) => { calm(u); u.scoped[0].pct = 100; u.scoped[0].resetsAt = iso(U_NOW + (51 * 3600000)); });
+is('drained: a model limit at zero', ['drained', 'Fable is out, back in 2d 3h'], [r.status.kind, say(r)]);
+r = kind(() => {});
+is('burning: HP will not last the week', ['burning', 'HP runs out Sat 21:53 at this pace'], [r.status.kind, say(r)]);
+r = kind((u) => { calm(u); u.scoped[0].willLastToReset = false; u.scoped[0].projectedExhaustionAt = iso(U_NOW + 3600000); });
+is('burning: a model limit that will not last', ['burning', 'Fable runs out Sat 21:53 at this pace'], [r.status.kind, say(r)]);
+r = kind((u) => { calm(u); u.fiveHour.pct = 85; u.fiveHour.resetsAt = iso(U_NOW + 40 * 60000); });
+is('low: Stamina at 20 or less', ['low', 'Low stamina, refills in 40m'], [r.status.kind, say(r)]);
+r = kind(calm);
+is('steady: nothing to report', ['steady', 'On pace, HP lasts to reset'], [r.status.kind, say(r)]);
+r = kind((u) => { u.sevenDay.pct = 100; u.fiveHour.pct = 100; u.scoped[0].pct = 100; });
+is('priority: HP at zero beats Stamina, a model limit and the run-out', 'ko', r.status.kind);
+r = kind((u) => { u.fiveHour.pct = 100; u.scoped[0].pct = 100; });
+is('priority: Stamina at zero beats a model limit and the run-out', 'winded', r.status.kind);
+r = kind((u) => { u.scoped[0].pct = 100; });
+is('priority: a model limit at zero beats the run-out', 'drained', r.status.kind);
+r = kind((u) => { u.fiveHour.pct = 90; });
+is('priority: HP burning beats low Stamina', 'burning', r.status.kind);
+is('a status with no reset time still reads', ['K.O. HP is out', 'Out of stamina'],
+  [usageLib.statusText({ status: { kind: 'ko', label: 'HP', at: null } }, U_NOW),
+    usageLib.statusText({ status: { kind: 'winded', label: 'Stamina', at: null } }, U_NOW)]);
+
+// Junk in, null or fewer meters out, never an exception.
+const junk = [null, undefined, 'text', 42, [], {}, { accounts: 'x' }, { accounts: [null, 5, 'x', []] },
+  { accounts: [{ active: true }] }, { accounts: [{ active: true, usage: 'x' }] },
+  { accounts: [{ active: true, usage: { fiveHour: { pct: 'lots' }, sevenDay: null, scoped: 'x' } }] }];
+is('malformed input gives null and never throws', junk.map(() => null),
+  junk.map((j) => { try { return usageLib.parse(j, U_NOW); } catch (e) { return 'threw'; } }));
+is('a junk pct drops that meter only, junk dates become null', [['hp'], [null]],
+  (() => {
+    const j = usageLib.parse({ accounts: [{ active: true, usage: {
+      fiveHour: { pct: 'x' }, sevenDay: { pct: 40, resetsAt: 'not a date', projectedExhaustionAt: [] },
+      scoped: [null, { pct: 1 }, { pct: 'y', name: 'Z' }] } }] }, U_NOW);
+    return [j.meters.map((m) => m.key), [j.meters[0].resetsAt]];
+  })());
+
+// until(): the countdown format.
+const MIN = 60000;
+is('until: under an hour, under a day, beyond', ['59m', '1h 0m', '23h 59m', '1d 0h', '4d 16h'],
+  [59 * MIN, 60 * MIN, (23 * 60 + 59) * MIN, 24 * 60 * MIN, (4 * 24 + 16) * 60 * MIN].map((ms) => usageLib.until(ms, 0)));
+is('until: past or now reads "now", null reads empty, minutes round up', ['now', 'now', '', '', '1m', '2m'],
+  [usageLib.until(-5, 0), usageLib.until(0, 0), usageLib.until(null, 0), usageLib.until(undefined, 0),
+    usageLib.until(1, 0), usageLib.until(61000, 0)]);
+
+// The poller's state machine, fed by hand.
+usageLib._reset();
+is('before any data, current() is null', null, usageLib.current(U_NOW));
+usageLib._apply(null, JSON.stringify(cswapSample()));
+is('a good answer: three meters, not stale', [3, false],
+  [usageLib.current(U_NOW).meters.length, usageLib.current(U_NOW).stale]);
+is('current() is byte-identical between calls while nothing changed', true,
+  JSON.stringify(usageLib.current(U_NOW)) === JSON.stringify(usageLib.current(U_NOW + 90 * MIN)));
+is('a failed call keeps the data and marks it stale', [3, true],
+  (() => { usageLib._apply(new Error('boom'), ''); const c = usageLib.current(U_NOW); return [c.meters.length, c.stale]; })());
+is('non-JSON output counts as a failure too', [3, true],
+  (() => { usageLib._apply(null, 'not json'); const c = usageLib.current(U_NOW); return [c.meters.length, c.stale]; })());
+is('the next good answer clears the flag', false,
+  (() => { usageLib._apply(null, JSON.stringify(cswapSample())); return usageLib.current(U_NOW).stale; })());
+is('a reset that passed while cswap was away reads as refilled', [[100, 100, 100], 'steady'],
+  (() => { const c = usageLib.current(Date.parse('2026-11-11T00:00:00Z')); return [c.meters.map((m) => m.left), c.status.kind]; })());
+is('cswap not installed: back to nothing', [null, 'missing'],
+  (() => { const code = usageLib._apply(Object.assign(new Error('x'), { code: 'ENOENT' }), ''); return [usageLib.current(U_NOW), code]; })());
+
+// fetchOnce() against a path that does not exist, and against "off".
+process.env.CLAUDE_MONITOR_CSWAP = path.join(tmpRoot, 'no-such-cswap');
+is('fetchOnce with cswap missing does not throw; current() stays null', [true, null],
+  (() => { let ok = true; try { usageLib.fetchOnce(); } catch (e) { ok = false; } return [ok, usageLib.current(U_NOW)]; })());
+process.env.CLAUDE_MONITOR_CSWAP = 'off';
+is('CLAUDE_MONITOR_CSWAP=off spawns nothing', [null],
+  (() => { usageLib.fetchOnce(); usageLib.start({ enabled: () => true }); return [usageLib.current(U_NOW)]; })());
+
+is('config: usage defaults on and turns off only with false', [true, false, true, true],
+  [configLib.sanitise(null).usage, configLib.sanitise({ usage: false }).usage,
+    configLib.sanitise({ usage: 'no' }).usage, configLib.DEFAULTS.usage]);
+is('demo usage: three meters, the same JSON on every call', [3, true],
+  [demoLib.usage().meters.length, JSON.stringify(demoLib.usage()) === JSON.stringify(demoLib.usage())]);
+
 // ---------------------------------------------------------------- render
 // The real renderer on fabricated sessions, at two widths and every grouping.
 console.log('\nrender (demo)');
@@ -1087,6 +1251,21 @@ fs.writeFileSync(privFile, JSON.stringify({ global: true }), 'utf8');
 const globalOut = board(140, [], 0, { CLAUDE_MONITOR_PRIVACY: privFile });
 is('private mode marks every row and says so in the header', [true, false, true],
   [/~ Invoice rounding/.test(globalOut), globalOut.includes('├─ '), globalOut.split('\n')[0].includes('private')]);
+
+// The usage line: under the brand, inside every width, and absent without cswap.
+const usageRow = (out) => out.split('\n').find((l) => l.includes('STA ')) || '';
+is('the demo board carries the usage line right under the brand', [true, true, true],
+  (() => { const l = board(120).split('\n'); return [l[0].includes('cmon'), /STA .*HP /.test(l[1]), l[2].startsWith('  ─')]; })());
+is('the usage line fits every width, and the whole frame still does', true,
+  [60, 70, 80, 100, 120, 160].every((cols) => {
+    const out = board(cols);
+    return text.width(usageRow(out)) > 0 && text.width(usageRow(out)) <= cols - 2 && widest(out) <= cols;
+  }));
+is('at 100 columns it keeps both meters and the verdict, at 60 only the meters', [true, false, true],
+  (() => { const a = usageRow(board(100)); const b = usageRow(board(60)); return [/HP runs out/.test(a), /HP runs out/.test(b), /STA .*HP /.test(b)]; })());
+is('without cswap a live (non-demo) board has no usage line', false,
+  execFileSync(process.execPath, [MONITOR, '--once'], { encoding: 'utf8', env: { ...process.env, COLUMNS: '100', NO_COLOR: '1' } })
+    .includes('STA '));
 
 is('clipAnsi cuts a coloured line without breaking an escape', [5, true],
   (() => {

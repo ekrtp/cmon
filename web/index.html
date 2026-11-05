@@ -46,6 +46,32 @@
   .conn i { width: 7px; height: 7px; border-radius: 50%; background: var(--done); }
   .conn.off i { background: var(--interrupted); animation: blink 1s infinite; }
   .clock { font: 12px var(--mono); color: var(--dim); }
+  body > header { row-gap: 12px; }
+  @media (max-width: 700px) { body > header { position: static; } }
+
+  /* usage HUD: what is left of the plan limits, as game bars ------------------- */
+  .hud {
+    flex: 0 0 100%; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px 22px;
+    padding: 10px 14px; border-radius: var(--radius); background: var(--surface); font-variant-numeric: tabular-nums;
+  }
+  .hud[hidden] { display: none; }
+  .meter { --c: var(--done); min-width: 0; }
+  .meter .top { display: flex; align-items: baseline; gap: 8px; }
+  .meter .top b { font-size: 13px; font-weight: 600; }
+  .meter .win { color: var(--dim); font-size: 12px; }
+  .meter .val { margin-left: auto; font-size: 20px; font-weight: 700; line-height: 1; color: var(--c); }
+  .meter .val small { margin-left: 2px; font-size: 12px; font-weight: 400; color: var(--dim); }
+  .segs { display: flex; gap: 2px; height: 12px; margin: 6px 0 5px; }
+  .segs i { flex: 1; border-radius: 1px; background: var(--surface-2); }
+  .segs i.on { background: var(--c); }
+  .segs i.over { background: color-mix(in srgb, var(--interrupted) 38%, var(--surface-2)); }
+  .segs i.hit { animation: hit .9s ease-out; }
+  .segs i.gain { animation: gain .5s ease-out backwards; animation-delay: calc(var(--i, 0) * 25ms); }
+  .meter .sub { color: var(--dim); font-size: 12px; }
+  .meter.crit .val, .meter.crit .segs i.on { animation: blink 1.4s infinite; }
+  .hud-st { align-self: center; min-width: 0; }
+  .hud-st b { display: block; font-size: 13px; font-weight: 600; color: var(--sc, var(--dim)); }
+  .hud-st small { display: block; color: var(--dim); font-size: 12px; }
 
   /* layout ------------------------------------------------------------------ */
   main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 22px; margin-top: 18px; }
@@ -210,7 +236,7 @@
   .loading { color: var(--dim); padding: 40px 0; text-align: center; }
 
   /* timeline ---------------------------------------------------------------- */
-  aside { position: sticky; top: 74px; align-self: start; max-height: calc(100vh - 92px); display: flex; flex-direction: column;
+  aside { position: sticky; top: calc(var(--head-h, 62px) + 12px); align-self: start; max-height: calc(100vh - var(--head-h, 62px) - 30px); display: flex; flex-direction: column;
     background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
   @media (max-width: 1100px) { aside { position: static; max-height: none; } }
   aside header { position: static; padding: 12px 14px 10px; background: none; gap: 10px; }
@@ -278,12 +304,15 @@
   @keyframes ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--asking) 70%, transparent); }
     100% { box-shadow: 0 0 0 7px transparent; } }
   @keyframes blink { 50% { opacity: .2; } }
+  @keyframes hit { from { background: var(--interrupted); } }
+  @keyframes gain { from { transform: scale(.4); opacity: 0; } }
   @keyframes arrive { from { background: color-mix(in srgb, var(--accent) 18%, transparent); } }
   @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
 </style>
 </head>
 <body>
 <header>
+  <div class="hud" id="hud" hidden></div>
   <div class="brand"><b>cmon</b><span>claude monitor</span></div>
   <div class="stats" id="stats"></div>
   <div class="spacer"></div>
@@ -714,6 +743,99 @@ function footer() {
   return `<footer>${state.demo ? 'Demo data. ' : ''}${hidden.length ? 'Hidden: ' + hidden.join(', ') + ' (cmon --all shows them). ' : ''}The theme menu above changes this page only; <span class="num">node scripts/config.js set theme &lt;name&gt;</span> changes cmon everywhere.</footer>`;
 }
 
+// --- usage HUD ---------------------------------------------------------------
+// Plan limits as game bars: Stamina is the 5-hour limit, HP the weekly one, and a
+// model's own weekly limit is an extra meter. Bars show what is LEFT. The numbers
+// come from cmon (which asks the cswap CLI); the page only draws them.
+function untilText(ms) {
+  if (ms == null) return '';
+  const d = ms - Date.now();
+  if (d <= 0) return 'now';
+  const mins = Math.ceil(d / 60000);
+  if (mins < 60) return mins + 'm';
+  if (mins < 1440) return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+  return `${Math.floor(mins / 1440)}d ${Math.floor((mins % 1440) / 60)}h`;
+}
+const hudTime = (ms) => new Date(ms).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' }).replace(',', '');
+const hudColour = (left) => (left > 50 ? 'var(--done)' : left > 20 ? 'var(--asking)' : 'var(--interrupted)');
+const HUD_VERDICT = { steady: 'var(--dim)', low: 'var(--asking)', burning: 'var(--asking)',
+  ko: 'var(--interrupted)', winded: 'var(--interrupted)', drained: 'var(--interrupted)' };
+
+function hudStatusText(u) {
+  const s = u && u.status;
+  if (!s) return '';
+  const back = s.at ? untilText(s.at) : '';
+  switch (s.kind) {
+    case 'ko': return back ? `K.O. HP respawns in ${back}` : 'K.O. HP is out';
+    case 'winded': return back ? `Out of stamina, back in ${back}` : 'Out of stamina';
+    case 'drained': return back ? `${s.label} is out, back in ${back}` : `${s.label} is out`;
+    case 'burning': return `${s.label} runs out ${hudTime(s.at)} at this pace`;
+    case 'low': return back ? `Low stamina, refills in ${back}` : 'Low stamina';
+    default: return 'On pace, HP lasts to reset';
+  }
+}
+
+// "Account 1", plus how old the numbers are once they are stale or over 15 minutes old.
+function hudAccountText(u) {
+  const base = u.account != null ? `Account ${u.account}` : 'Account';
+  const age = u.fetchedAt ? Date.now() - u.fetchedAt : 0;
+  if (!u.stale && age <= 15 * 60000) return base;
+  const text = u.fetchedAt ? ago(u.fetchedAt) : '';
+  return text && text !== 'now' ? `${base} · data ${text} old` : `${base} · old data`;
+}
+
+// Segments that just turned off flash (hit), segments that just turned on pop in
+// (gain). The first draw, and a meter that was not there before, stay still.
+let hudDrawn;
+let hudFilled = new Map();
+function meterHtml(m, before) {
+  const filled = Math.round(m.left / 5);
+  const pace = m.expectedLeft != null && m.expectedLeft > m.left ? Math.round(m.expectedLeft / 5) : 0;
+  const was = before.get(m.key);
+  let segs = '';
+  for (let k = 0; k < 20; k++) {
+    const cls = [];
+    if (k < filled) { cls.push('on'); if (was != null && k >= was) cls.push('gain'); }
+    else { if (k < pace) cls.push('over'); if (was != null && k < was) cls.push('hit'); }
+    segs += `<i${cls.length ? ` class="${cls.join(' ')}"` : ''}${was != null && k >= was ? ` style="--i:${k - was}"` : ''}></i>`;
+  }
+  const verb = m.key === 'hp' ? 'Respawns in' : 'Refills in';
+  const sub = m.resetsAt ? `${verb} <span data-until="${m.resetsAt}">${untilText(m.resetsAt)}</span>` : (m.left === 100 ? 'Full' : '');
+  const over = m.expectedLeft != null && m.expectedLeft > m.left ? ` · ${m.expectedLeft - m.left} over pace` : '';
+  const what = m.key === 'stamina' ? '5-hour limit' : m.key === 'hp' ? 'Weekly limit' : `${m.label} weekly limit`;
+  return `<div class="meter ${m.left > 0 && m.left <= 10 ? 'crit' : ''}" style="--c:${hudColour(m.left)}" role="meter"
+      aria-valuenow="${m.left}" aria-valuemin="0" aria-valuemax="100" aria-label="${esc(m.label)}, ${m.left} of 100 left"
+      title="${esc(what)}: ${m.pct}% used, ${m.left}% left">
+    <div class="top"><b>${esc(m.label)}</b><span class="win">${esc(m.window)}</span><span class="val">${m.left}<small>/100</small></span></div>
+    <div class="segs">${segs}</div>
+    <div class="sub">${sub}${over}</div>
+  </div>`;
+}
+
+function renderUsage() {
+  const u = state.usage && state.usage.meters && state.usage.meters.length ? state.usage : null;
+  const key = JSON.stringify(u);
+  if (key === hudDrawn) return;
+  hudDrawn = key;
+  const el = $('hud');
+  if (!u) { el.hidden = true; el.innerHTML = ''; hudFilled = new Map(); return; }
+  const before = hudFilled;
+  el.innerHTML = u.meters.map((m) => meterHtml(m, before)).join('') +
+    `<div class="hud-st"><b id="hud-status" style="--sc:${HUD_VERDICT[u.status && u.status.kind] || 'var(--dim)'}">${esc(hudStatusText(u))}</b>
+      <small id="hud-acct">${esc(hudAccountText(u))}</small></div>`;
+  el.hidden = false;
+  hudFilled = new Map(u.meters.map((m) => [m.key, Math.round(m.left / 5)]));
+}
+
+// Countdowns and the verdict move with the clock between snapshots.
+function tickUsage() {
+  for (const el of document.querySelectorAll('[data-until]')) el.textContent = untilText(Number(el.dataset.until));
+  const u = state && state.usage;
+  if (!u || !$('hud-status')) return;
+  $('hud-status').textContent = hudStatusText(u);
+  $('hud-acct').textContent = hudAccountText(u);
+}
+
 function renderStats() {
   const rows = state.rows || [];
   const count = (...s) => rows.filter((r) => s.includes(r.status)).length;
@@ -793,6 +915,7 @@ function render() {
   applyTheme(currentTheme());
   renderThemePicker();
   renderPrivate();
+  renderUsage();
   renderStats();
   renderBoard();
   renderFilters();
@@ -903,8 +1026,16 @@ setInterval(() => {
   $('clock').textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   if (document.hidden) return;
   for (const el of document.querySelectorAll('[data-ago]')) el.textContent = ago(Number(el.dataset.ago));
+  tickUsage();
 }, 15000);
 $('clock').textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+// The header grew a row for the usage bar, so the Today panel cannot assume how
+// tall it is when it sticks below it.
+const topBar = document.querySelector('body > header');
+if (window.ResizeObserver) {
+  new ResizeObserver(() => document.documentElement.style.setProperty('--head-h', topBar.offsetHeight + 'px')).observe(topBar);
+}
 
 function connect() {
   const es = new EventSource('/events');

@@ -56,6 +56,32 @@ It watches; it never drives. No hooks, nothing written into Claude Code's own
 directories, `settings.json` untouched. Five keys: `t` for themes, `g` for
 grouping, `a` to show or hide the agent tree, `h` and `p` for [privacy](#privacy).
 
+### The usage bar
+
+The top of both boards shows what is **left** of your plan limits, as a game HUD:
+
+```text
+  STA ███████░░░ 70 4h 9m   HP █████░░░░░ 46 4d 16h   Fable ██████████ 100 4d 16h   HP runs out Sat 21:53 at this pace
+```
+
+| Name | What it is |
+|---|---|
+| **Stamina** (`STA`) | the 5-hour limit |
+| **HP** | the weekly limit |
+| a model name (e.g. `Fable`) | that model's own weekly limit |
+
+Each bar is 100 minus what you used, with the time until it refills beside it.
+Green above 50, amber above 20, red below; the last 10 percent blink on the page. On the
+page, the segments between what is left and what the week's pace allowed show as
+a darker block ("21 over pace"), and a short verdict says whether the pace will
+last to the reset. Only the active account is shown.
+
+The numbers come from the `cswap` (claude-swap) CLI, via `cswap list --json`, asked once a minute. cmon holds no token and makes no
+network call itself; if `cswap` is installed, *it* polls Anthropic's usage
+endpoint on its own schedule and answers from its cache in between. Without
+`cswap` the bar is simply not drawn. `"usage": false` in the config turns it off
+(cmon then does not run `cswap` at all).
+
 ### The web board
 
 ```powershell
@@ -87,7 +113,7 @@ The same data as a page:
 
 Open it in VS Code's Simple Browser (`Ctrl+Shift+P` → *Simple Browser: Show*) to
 keep it next to your chats without another window. It binds to 127.0.0.1 only,
-loads nothing from the network, pushes updates only when something changed, and
+loads nothing from the network (cmon itself makes none; see [the usage bar](#the-usage-bar)), pushes updates only when something changed, and
 draws nothing while the tab is hidden. Measured with 5 live sessions: the server
 holds ~68 MB and ~6% of one core; the page ~1 MB of JS heap. The colours follow
 the configured theme. `cmon --web --demo` serves fabricated sessions.
@@ -299,7 +325,7 @@ narrow terminal columns drop in a fixed order — `model`, `effort`, `ctx` and
 | `--no-agents` | hide the sub-agent and workflow tree (`a` brings it back) |
 | `--demo` | fabricated sessions (screenshots, testing) |
 | `--version` · `--help` | version · the usage block above |
-| `npm test` | 198 fixture assertions, no network, no deps |
+| `npm test` | 244 fixture assertions, no network, no deps |
 | `npm run config` | show or edit the config |
 | `npm run probe` | re-measure every file format this depends on |
 | `npm run screenshot` | regenerate the README images from `--demo` |
@@ -342,7 +368,8 @@ touch the config of a board you have open.
   "notifications": false,
   "showAgents": true,
   "agentLingerMs": 600000,
-  "agentIdleAfterMs": 900000
+  "agentIdleAfterMs": 900000,
+  "usage": true
 }
 ```
 
@@ -420,6 +447,7 @@ and it backs up `settings.json` first.
 | `~/.claude/projects/*/<id>/workflows/` | a workflow's name (its script) and how it ended (`<runId>.json`) | read only |
 | `~/.claude/agent-dashboard/dashboard.db` | curated names, sub-agent counts (fallback) | read only, optional |
 | `~/.claude/monitor/timeline/<date>.jsonl` | the web board's "Today" column | cmon's own directory, written by `--web` |
+| `cswap list --json` | plan limits for the usage bar | optional, read only |
 | `~/.claude/tasks/<session>/*.json` | plan progress | read only |
 | `<workspace>/CLAUDE.md` | the project list for `focus` | read only |
 | `~/.claude/monitor/config.json` | configuration | read + created once |

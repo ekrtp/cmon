@@ -16,6 +16,7 @@
 //   tree    <- sub-agents and workflow runs, from <session>/subagents/ (lib/subagents.js)
 //   focus   <- which project the conversation is actually about (lib/projects.js)
 //   privacy <- ~/.claude/monitor/privacy.json: hidden or title-only sessions (lib/privacy.js)
+//   limits  <- `cswap list --json`: the Stamina / HP bar at the top (lib/usage.js, optional)
 //
 // Usage:  cmon [options]        (or `node monitor.js` if the command is not installed)
 //   --once                 render once and exit
@@ -58,6 +59,7 @@ const demo = require('./lib/demo');
 const subagents = require('./lib/subagents');
 const costLib = require('./lib/cost');
 const privacyLib = require('./lib/privacy');
+const usage = require('./lib/usage');
 
 const argv = process.argv.slice(2);
 const flag = (name) => argv.includes('--' + name);
@@ -146,6 +148,9 @@ function applyOverrides(base) {
 
 let active = applyOverrides(cfg);
 let theme = themes.resolve(active.theme);
+
+// The plan limits for the bar at the top; null hides it.
+const usageNow = () => DEMO ? demo.usage() : (active.usage ? usage.current() : null);
 
 // Generated colours (the focus tags) must sit readably on whatever background
 // the theme implies. `header` is the theme's brightest text colour, so a light
@@ -629,6 +634,49 @@ function groupsOf(rows) {
   return keys.map((key) => ({ key, rows: map.get(key) }));
 }
 
+// --- usage bar -------------------------------------------------------------
+// One line under the brand: what is LEFT of the 5-hour limit (STA), the weekly
+// limit (HP) and any model-scoped weekly limit, plus a one-line verdict. Falls
+// back to fewer pieces rather than running past the terminal edge.
+const usageColour = (left) => paint(left > 50 ? 'done' : left > 20 ? 'asking' : 'interrupted');
+const STATUS_ROLE = { steady: 'dim', low: 'asking', burning: 'asking', ko: 'interrupted', winded: 'interrupted', drained: 'interrupted' };
+const usageTime = (ms) => new Date(ms).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' }).replace(',', '');
+
+function usageLine(total) {
+  const u = usageNow();
+  if (!u || !u.meters || !u.meters.length) return null;
+  const now = Date.now();
+
+  const meter = (m, countdown) => {
+    const cells = Math.round(m.left / 10);
+    const c = usageColour(m.left);
+    const wait = countdown && m.resetsAt ? ` ${paint('dim')}${usage.until(m.resetsAt, now)}${RESET}` : '';
+    return `${BOLD}${m.short}${RESET} ${c}${'█'.repeat(cells)}${RESET}${paint('dim')}${'░'.repeat(10 - cells)}${RESET} ` +
+      `${c}${m.left}${RESET}${wait}`;
+  };
+  const verdict = () => {
+    const text = usage.statusText(u, now, usageTime);
+    return text ? `${paint(STATUS_ROLE[u.status.kind] || 'dim')}${text}${RESET}` : '';
+  };
+  const old = u.stale ? `${paint('dim')} · old data${RESET}` : '';
+
+  const core = u.meters.filter((m) => m.key === 'stamina' || m.key === 'hp');
+  const pair = core.length ? core : u.meters.slice(0, 2);
+  const build = (list, countdown, status) =>
+    '  ' + list.map((m) => meter(m, countdown)).join('   ') + (status ? '   ' + verdict() : '') + old;
+  const candidates = [
+    () => build(u.meters, true, true),
+    () => build(pair, true, true),
+    () => build(pair, false, true),
+    () => build(pair, false, false),
+  ];
+  for (const make of candidates) {
+    const line = make();
+    if (width(line) <= total - 2) return line;
+  }
+  return candidates[candidates.length - 1]();
+}
+
 function render(snapshot) {
   const { rows, hiddenEmpty, hiddenStale } = snapshot;
   const blocked = (snapshot.blocked || []).length;
@@ -652,6 +700,8 @@ function render(snapshot) {
     `${theme.fallbackFrom ? ` (unknown "${theme.fallbackFrom}", using dark)` : ''}` +
     `${active.notifications ? ' · notify on' : ''}${RESET}` +
     `${prefs.global ? `${paint('dim')} · ${RESET}${BOLD}${paint('accent')}private${RESET}` : ''}`);
+  const limits = usageLine(total);
+  if (limits) out.push(limits);
   out.push('  ' + rule);
   if (roomy) out.push('');
 
@@ -982,6 +1032,7 @@ function webState(snapshot, events, closed) {
     timeline: privateTimeline(events, known),
     // Rules are not secret: they name folders, and the page lists them to edit.
     privacy: { global: prefs.global, rules: prefs.rules },
+    usage: usageNow(),
     demo: DEMO,
   };
 }
@@ -991,6 +1042,7 @@ if (flag('web')) {
   const timeline = require('./lib/timeline');
   const recentLib = require('./lib/recent');
   const port = Number(value('port')) || 4280;
+  if (!DEMO) usage.start({ enabled: () => active.usage });
   const runCost = (row, runId) => costLib.forRun(row.jsonl, row.sessionId, runId);
   // sessionId -> whether a folder rule hides it, from the last tick: an explicit
   // "visible" is kept only for those (lib/privacy.js setSession).
@@ -1045,12 +1097,15 @@ if (flag('web')) {
 if (flag('web')) {
   // the web branch above owns the process
 } else if (ONCE) {
+  if (!DEMO && active.usage) usage.fetchOnce();
   paintFrame(collect());
   ccboard.close();
 } else {
   // Two clocks: data is re-read on refreshMs, the spinner advances on
   // animationMs. Animating never touches the disk — it repaints the snapshot.
   let snapshot = collect();
+  // The bar fills in on a later repaint, once cswap has answered.
+  if (!DEMO) usage.start({ enabled: () => active.usage });
   // Blocked rows go in too: notify keeps their status (so un-blocking one is not
   // a "new" transition) but never sends for them.
   const watched = (s) => [...s.rows, ...s.blocked];

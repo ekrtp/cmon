@@ -6,6 +6,17 @@ is the two commits at the bottom.
 
 ## Unreleased
 
+- **Usage bar** (`lib/usage.js`) at the top of the table and the page: the
+  5-hour limit as **Stamina**, the weekly limit as **HP** and any model's weekly
+  limit (Fable, say) as an extra meter, each showing what is left with its
+  refill time, plus a one-line verdict (`HP runs out Sat 21:53 at this pace`).
+  The page draws 20-segment bars, marks the segments spent beyond the week's
+  pace, blinks the last 10 and flashes segments as they drain or refill.
+- The numbers come from `cswap list --json`, once a minute, active account only.
+  cmon holds no token and makes no network call itself; without `cswap` the bar
+  is not drawn, and `"usage": false` stops cmon from running it.
+- Page: the Today panel now sticks below the header whatever its height; under
+  700px the header no longer sticks.
 - **Privacy per session** (`lib/privacy.js`, `~/.claude/monitor/privacy.json`).
   A session can be `visible`, `title` (title, status, model, context and cost
   only) or `blocked` (off the board, out of Today, no notifications, listed in a
