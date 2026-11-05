@@ -12,6 +12,11 @@ const os = require('os');
 // you have open changes theme for a couple of seconds.
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-monitor-test-'));
 process.env.CLAUDE_MONITOR_CONFIG = path.join(tmpRoot, 'config.json');
+// Same for lib/privacy: a test that blocks a session must not hide it on your board.
+process.env.CLAUDE_MONITOR_PRIVACY = path.join(tmpRoot, 'privacy.json');
+// And for lib/usage: a test run never calls the real cswap (monitor.js child
+// processes inherit this too).
+process.env.CLAUDE_MONITOR_CSWAP = 'off';
 
 const titles = require('../lib/titles');
 const statusLib = require('../lib/status');
@@ -378,6 +383,11 @@ is('interrupted also counts as wanting you', 1,
 
 is('the message names the session', true,
   outbox.length > 0 && outbox[outbox.length - 1].message.includes('T d'));
+
+notify.reset();
+const blockedRow = (status) => ({ ...nrow('z', status), privacy: { level: 'blocked' } });
+notify.check([blockedRow('running')], true, fakeSend);
+is('a blocked session never notifies', 0, notify.check([blockedRow('asking')], true, fakeSend));
 
 // ---------------------------------------------------------------- ccboard
 console.log('\nccboard (optional source)');
@@ -893,14 +903,311 @@ is('the agent tree is on by default and can be turned off', [true, false],
   [configLib.sanitise({}).showAgents, configLib.sanitise({ showAgents: false }).showAgents]);
 is('agentLingerMs falls back when absurd', 600000, configLib.sanitise({ agentLingerMs: -5 }).agentLingerMs);
 
+// ---------------------------------------------------------------- privacy
+console.log('\nprivacy');
+const privacy = require('../lib/privacy');
+is('the suite never touches the real privacy file', true, privacy.FILE.startsWith(tmpRoot));
+
+const prow = (extra) => ({
+  sessionId: 's1', title: 'Real title', titleSource: 'ai-title', status: 'done', model: 'opus-5', effort: 'high',
+  contextTokens: 50000, cost: 1.5, tokens: 900000, lastEvent: 1, pid: 7, src: 'vsc',
+  project: 'workspace', cwd: 'C:\\Users\\you\\workspace\\secret-app', branch: 'main', action: 'Bash',
+  permissionMode: 'default', focus: { name: 'billing-api', confident: true },
+  plan: { total: 2, completed: 1, current: 'Write the memo', list: [{ id: '1', subject: 'Write the memo' }] },
+  recent: { lastPrompt: 'the prompt', reply: 'the reply', activity: [{ name: 'Bash', detail: 'ls' }] },
+  agents: { running: 1, total: 2 },
+  tree: { items: [{ kind: 'agent', node: { label: 'Look at x' } }], all: [], counts: { running: 1, total: 2, workflows: 0 } },
+  jsonl: 'C:\\x.jsonl',
+  ...(extra || {}),
+});
+const P = (o) => privacy.sanitise(o);
+const lv = (row, prefs) => privacy.resolve(row, prefs).level;
+
+is('nothing set: visible', 'visible', lv(prow(), P({})));
+is('a session entry beats a rule', 'title',
+  lv(prow(), P({ sessions: { s1: { level: 'title' } }, rules: [{ match: 'billing', level: 'blocked' }] })));
+is('an explicit visible beats a rule', ['visible', 'session'],
+  (() => { const r = privacy.resolve(prow(), P({ sessions: { s1: { level: 'visible' } }, rules: [{ match: 'billing', level: 'blocked' }] })); return [r.level, r.source]; })());
+is('global turns visible into title, source global', ['title', 'global'],
+  (() => { const r = privacy.resolve(prow(), P({ global: true })); return [r.level, r.source]; })());
+is('global leaves blocked blocked', 'blocked', lv(prow(), P({ global: true, sessions: { s1: { level: 'blocked' } } })));
+is('a rule matches the focus name, case-insensitive', 'blocked', lv(prow(), P({ rules: [{ match: 'BILLING', level: 'blocked' }] })));
+is('a rule matches the project', 'title', lv(prow({ focus: null }), P({ rules: [{ match: 'worksp', level: 'title' }] })));
+is('a rule matches the cwd with backslashes as /', 'blocked',
+  lv(prow({ focus: null, project: 'x' }), P({ rules: [{ match: 'workspace/secret-app', level: 'blocked' }] })));
+is('a rule written with backslashes still matches', 'blocked',
+  lv(prow({ focus: null, project: 'x' }), P({ rules: [{ match: 'you\\workspace\\secret', level: 'blocked' }] })));
+is('the first matching rule wins', 'title',
+  lv(prow(), P({ rules: [{ match: 'billing', level: 'title' }, { match: 'workspace', level: 'blocked' }] })));
+is('no match: visible', 'visible', lv(prow(), P({ rules: [{ match: 'elsewhere', level: 'blocked' }] })));
+is('sanitise drops unknown levels and empty matches', { global: false, sessions: { s2: { alias: 'Kept' } }, rules: [{ match: 'ok', level: 'title' }] },
+  P({ global: 'yes', sessions: { s1: { level: 'secret' }, s2: { level: 'nope', alias: '  Kept ' } },
+    rules: [{ match: '', level: 'blocked' }, { match: 'x', level: 'weird' }, { match: 'ok', level: 'title' }, null] }));
+
+const titleOnly = privacy.redact(prow(), { level: 'title', alias: '', source: 'session', ruled: false });
+const CONTENT = ['recent', 'action', 'project', 'cwd', 'branch', 'focus', 'plan', 'permissionMode', 'jsonl'];
+is('redact strips every content field', true,
+  CONTENT.every((k) => !titleOnly[k] || (typeof titleOnly[k] === 'object' && !Object.keys(titleOnly[k]).length)));
+is('redact empties the agent tree but keeps its counts', [0, 0, { running: 1, total: 2, workflows: 0 }],
+  [titleOnly.tree.items.length, titleOnly.tree.all.length, titleOnly.tree.counts]);
+is('redact keeps status, cost, model, ctx and the title', ['done', 1.5, 'opus-5', 50000, 'Real title'],
+  [titleOnly.status, titleOnly.cost, titleOnly.model, titleOnly.contextTokens, titleOnly.title]);
+is('no transcript text survives in a title-only row', false,
+  /the prompt|the reply|Write the memo|Look at x|billing-api|secret-app|Bash/.test(JSON.stringify(titleOnly)));
+is('every row carries its privacy', { level: 'title', alias: false, source: 'session', ruled: false }, titleOnly.privacy);
+is('an alias becomes the display title, also on a visible row', ['Work', 'alias', 'the reply'],
+  (() => { const r = privacy.redact(prow(), { level: 'visible', alias: 'Work', source: 'none' }); return [r.title, r.titleSource, r.recent.reply]; })());
+is('an aliased title-only row hides the real title too', false,
+  JSON.stringify(privacy.redact(prow(), { level: 'title', alias: 'Work', source: 'session' })).includes('Real title'));
+
+fs.writeFileSync(privacy.FILE, '{ "global": tru', 'utf8');
+is('a corrupt privacy file reads as defaults', { global: false, sessions: {}, rules: [] }, privacy.load());
+fs.rmSync(privacy.FILE, { force: true });
+is('a missing privacy file reads as defaults', { global: false, sessions: {}, rules: [] }, privacy.load());
+
+privacy.setSession('s1', { level: 'title', alias: 'Client' });
+is('setSession writes level and alias', ['title', 'Client'],
+  [privacy.load().sessions.s1.level, privacy.load().sessions.s1.alias]);
+privacy.setSession('s1', { alias: '' });
+is('an empty alias clears it, the level stays', [undefined, 'title'],
+  [privacy.load().sessions.s1.alias, privacy.load().sessions.s1.level]);
+privacy.setSession('s1', { level: 'visible' });
+is('visible with no alias deletes the entry', false, 's1' in privacy.load().sessions);
+privacy.setSession('s1', { level: 'visible' }, { ruled: true });
+is('...unless a rule hides the session: then visible is kept as the override', 'visible',
+  (privacy.load().sessions.s1 || {}).level);
+privacy.setSession('s1', { alias: 'x'.repeat(200) });
+is('an alias is capped at 60 characters', 60, privacy.load().sessions.s1.alias.length);
+is('an unknown level is refused', null, privacy.setSession('s1', { level: 'secret' }));
+privacy.setGlobal(true);
+is('setGlobal writes private mode', true, privacy.load().global);
+privacy.addRule({ match: '  ai-influencer  ', level: 'blocked' });
+is('addRule trims and stores', [{ match: 'ai-influencer', level: 'blocked' }], privacy.load().rules);
+is('addRule refuses an empty match', null, privacy.addRule({ match: '   ', level: 'blocked' }));
+privacy.removeRule(0);
+is('removeRule drops by index', [], privacy.load().rules);
+is('applyRequest routes each body shape', [true, true, true, true, false, false],
+  [privacy.applyRequest({ sessionId: 's9', level: 'blocked' }),
+    privacy.applyRequest({ sessionId: 's9', alias: 'Nine' }),
+    privacy.applyRequest({ global: false }),
+    privacy.applyRequest({ addRule: { match: 'm', level: 'title' } }),
+    privacy.applyRequest({ sessionId: 's9', level: 'nope' }),
+    privacy.applyRequest(['global'])]);
+is('no temp file is left behind by the atomic writes', [],
+  fs.readdirSync(tmpRoot).filter((n) => n.startsWith('privacy.json.tmp')));
+// The render tests below run monitor.js with this env: start them clean.
+fs.rmSync(privacy.FILE, { force: true });
+
+// The one POST endpoint, on a real socket. Asynchronous: awaited at the end.
+const webTests = (async () => {
+  const http = require('http');
+  const net = require('net');
+  const web = require('../lib/web');
+  const port = await new Promise((done) => {
+    const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => done(p)); });
+  });
+  const got = [];
+  const server = await new Promise((done) => {
+    const s = web.start(port, () => done(s), { onPrivacy: (body) => { got.push(body); return body.global !== 'refuse'; } });
+  });
+  const post = (headers, body) => new Promise((done) => {
+    const req = http.request({ host: '127.0.0.1', port, path: '/api/privacy', method: 'POST',
+      headers: { Host: `127.0.0.1:${port}`, ...headers } }, (res) => { res.resume(); done(res.statusCode); });
+    req.on('error', () => done(0));
+    req.end(body);
+  });
+  const json = { 'Content-Type': 'application/json' };
+  const results = [
+    await post({ ...json, Origin: 'http://evil.example' }, '{"global":true}'),
+    await post({ 'Content-Type': 'text/plain' }, '{"global":true}'),
+    await post({ ...json, Host: `evil.example:${port}` }, '{"global":true}'),
+    await post(json, 'not json'),
+    await post(json, JSON.stringify({ global: 'refuse' })),
+    await post(json, JSON.stringify({ addRule: { match: 'x'.repeat(5000), level: 'title' } })),
+    await post({ ...json, Origin: `http://127.0.0.1:${port}` }, '{"global":true}'),
+    await post({ ...json, Host: `localhost:${port}` }, '{"global":false}'),
+  ];
+  const options = await new Promise((done) => {
+    const req = http.request({ host: '127.0.0.1', port, path: '/api/privacy', method: 'OPTIONS',
+      headers: { Origin: 'http://evil.example', 'Access-Control-Request-Method': 'POST' } },
+    (res) => { res.resume(); done([res.statusCode, res.headers['access-control-allow-origin'] || null]); });
+    req.end();
+  });
+  server.close();
+  return { results, handled: got.length, options };
+})();
+
+// ---------------------------------------------------------------- usage bar
+// lib/usage.js on a fixture shaped like `cswap list --json`. Nothing here runs cswap.
+console.log('\nusage bar (cswap)');
+const usageLib = require('../lib/usage');
+const demoLib = require('../lib/demo');
+const U_NOW = Date.parse('2026-11-05T20:02:00Z');
+const iso = (ms) => new Date(ms).toISOString();
+
+const cswapSample = () => ({
+  schemaVersion: 1, activeAccountNumber: 1,
+  accounts: [
+    { number: 1, email: 'a@b.c', organizationName: "a@b.c's Organization", organizationUuid: 'aaaa-bbbb', isOrganization: true,
+      active: true, usageStatus: 'ok',
+      usage: {
+        fiveHour: { pct: 30, resetsAt: '2026-11-06T00:10:00.213598+00:00', countdown: '4h 8m', clock: 'Nov 6 03:10' },
+        sevenDay: { pct: 54, resetsAt: '2026-11-10T13:00:00.213618+00:00', countdown: '4d 16h', clock: 'Nov 10 16:00',
+          expectedPct: 32.8, aheadOfPace: true, projectedExhaustionAt: '2026-11-07T18:53:39Z', willLastToReset: false },
+        scoped: [{ pct: 0, resetsAt: '2026-11-10T13:00:00+00:00', countdown: '4d 16h', clock: 'Nov 10 16:00',
+          expectedPct: 32.8, aheadOfPace: false, willLastToReset: true, name: 'Fable' }],
+      },
+      usageFetchedAt: '2026-11-05T20:01:22Z', usageAgeSeconds: 0 },
+    { number: 2, email: 'd@e.f', active: false, usageStatus: 'unavailable', usage: null,
+      lastGoodUsage: { fiveHour: { pct: 0 }, sevenDay: { pct: 100, resetsAt: '2026-11-02T15:59:59.569036+00:00', expectedPct: 87,
+        aheadOfPace: false, projectedExhaustionAt: '2026-11-01T18:14:29Z', willLastToReset: false } },
+      lastGoodFetchedAt: '2026-11-01T18:14:29Z', lastGoodAgeSeconds: 352013.3 },
+  ],
+  unclaimedCredentials: [],
+});
+// The sample with its active account's usage edited.
+const cswapWith = (edit) => { const j = cswapSample(); edit(j.accounts[0].usage, j.accounts[0], j); return j; };
+const parsed = usageLib.parse(cswapSample(), U_NOW);
+
+is('parse: the active account, three meters, what is left',
+  [1, false, ['stamina', 'hp', 'scoped:Fable'], ['Stamina', 'HP', 'Fable'], [70, 46, 100]],
+  [parsed.account, parsed.stale, parsed.meters.map((m) => m.key), parsed.meters.map((m) => m.label), parsed.meters.map((m) => m.left)]);
+is('parse: the icons and windows the boards use',
+  [['⚡', '❤️', '📖'], ['5h', 'week', 'week']],
+  [parsed.meters.map((m) => m.icon), parsed.meters.map((m) => m.window)]);
+is('parse: a scoped model without its own icon gets the sparkle', '✨',
+  usageLib.parse({ accounts: [{ active: true, usage: { scoped: [{ name: 'Nova', pct: 5 }] } }] }, 0).meters[0].icon);
+is('parse: expectedLeft is 100 - expectedPct, null where cswap gave none',
+  [null, 67, 67], parsed.meters.map((m) => m.expectedLeft));
+is('parse: runsOutAt only where the pace will not last', [null, Date.parse('2026-11-07T18:53:39Z'), null],
+  parsed.meters.map((m) => m.runsOutAt));
+is('parse: reset times in ms, fetched time kept',
+  [Date.parse('2026-11-06T00:10:00.213598+00:00'), Date.parse('2026-11-05T20:01:22Z')],
+  [parsed.meters[0].resetsAt, parsed.fetchedAt]);
+is('parse: no email or organization anywhere in the result', false,
+  /@|organization|aaaa-bbbb/i.test(JSON.stringify(parsed)));
+is('parse: the status of the sample is HP burning', { kind: 'burning', label: 'HP', at: Date.parse('2026-11-07T18:53:39Z') }, parsed.status);
+
+is('an active account with usage:null falls back to lastGood, stale',
+  [2, true, [0, 0], true],
+  (() => {
+    const j = cswapSample();
+    j.accounts[0].active = false; j.accounts[1].active = true; j.activeAccountNumber = 2;
+    const r = usageLib.parse(j, U_NOW);
+    // lastGood's week reset (Nov 2) is long past: refilled, not 100% used.
+    return [r.account, r.stale, [r.meters[0].pct, r.meters[1].pct], r.fetchedAt === Date.parse('2026-11-01T18:14:29Z')];
+  })());
+is('with no active flag, activeAccountNumber picks the account', 2,
+  usageLib.parse({ activeAccountNumber: 2, accounts: [
+    { number: 1, usage: { fiveHour: { pct: 1 } } }, { number: 2, usage: { fiveHour: { pct: 2 } } }] }, U_NOW).account);
+is('no active account: null', null,
+  usageLib.parse({ activeAccountNumber: 9, accounts: [{ number: 1, active: false, usage: { fiveHour: { pct: 1 } } }] }, U_NOW));
+
+is('a past resetsAt is a refilled window', [100, null, null, null],
+  (() => {
+    const r = usageLib.parse(cswapWith((u) => { u.sevenDay.resetsAt = iso(U_NOW - 1000); }), U_NOW).meters[1];
+    return [r.left, r.resetsAt, r.expectedLeft, r.runsOutAt];
+  })());
+is('a past projectedExhaustionAt is no run-out', null,
+  usageLib.parse(cswapWith((u) => { u.sevenDay.projectedExhaustionAt = iso(U_NOW - 1000); }), U_NOW).meters[1].runsOutAt);
+is('willLastToReset:true is no run-out either', null,
+  usageLib.parse(cswapWith((u) => { u.sevenDay.willLastToReset = true; }), U_NOW).meters[1].runsOutAt);
+is('pct is rounded and clamped to 0-100', [34, 100, 0],
+  [33.6, 140, -5].map((p) => usageLib.parse(cswapWith((u) => { u.fiveHour.pct = p; }), U_NOW).meters[0].pct));
+
+// Every status kind, with its sentence, and who wins.
+const kind = (edit) => usageLib.parse(cswapWith(edit), U_NOW);
+const say = (r) => usageLib.statusText(r, U_NOW, () => 'Sat 21:53');
+const calm = (u) => { u.sevenDay.willLastToReset = true; u.sevenDay.pct = 30; };
+let r = kind((u) => { u.sevenDay.pct = 100; });
+is('ko: HP at zero', ['ko', 'K.O. HP respawns in 4d 16h'], [r.status.kind, say(r)]);
+r = kind((u) => { calm(u); u.fiveHour.pct = 100; u.fiveHour.resetsAt = iso(U_NOW + 12 * 60000); });
+is('winded: Stamina at zero', ['winded', 'Out of stamina, back in 12m'], [r.status.kind, say(r)]);
+r = kind((u) => { calm(u); u.scoped[0].pct = 100; u.scoped[0].resetsAt = iso(U_NOW + (51 * 3600000)); });
+is('drained: a model limit at zero', ['drained', 'Fable is out, back in 2d 3h'], [r.status.kind, say(r)]);
+r = kind(() => {});
+is('burning: HP will not last the week', ['burning', 'HP runs out Sat 21:53 at this pace'], [r.status.kind, say(r)]);
+r = kind((u) => { calm(u); u.scoped[0].willLastToReset = false; u.scoped[0].projectedExhaustionAt = iso(U_NOW + 3600000); });
+is('burning: a model limit that will not last', ['burning', 'Fable runs out Sat 21:53 at this pace'], [r.status.kind, say(r)]);
+r = kind((u) => { calm(u); u.fiveHour.pct = 85; u.fiveHour.resetsAt = iso(U_NOW + 40 * 60000); });
+is('low: Stamina at 20 or less', ['low', 'Low stamina, refills in 40m'], [r.status.kind, say(r)]);
+r = kind(calm);
+is('steady: nothing to report', ['steady', 'On pace, HP lasts to reset'], [r.status.kind, say(r)]);
+r = kind((u) => { u.sevenDay.pct = 100; u.fiveHour.pct = 100; u.scoped[0].pct = 100; });
+is('priority: HP at zero beats Stamina, a model limit and the run-out', 'ko', r.status.kind);
+r = kind((u) => { u.fiveHour.pct = 100; u.scoped[0].pct = 100; });
+is('priority: Stamina at zero beats a model limit and the run-out', 'winded', r.status.kind);
+r = kind((u) => { u.scoped[0].pct = 100; });
+is('priority: a model limit at zero beats the run-out', 'drained', r.status.kind);
+r = kind((u) => { u.fiveHour.pct = 90; });
+is('priority: HP burning beats low Stamina', 'burning', r.status.kind);
+is('a status with no reset time still reads', ['K.O. HP is out', 'Out of stamina'],
+  [usageLib.statusText({ status: { kind: 'ko', label: 'HP', at: null } }, U_NOW),
+    usageLib.statusText({ status: { kind: 'winded', label: 'Stamina', at: null } }, U_NOW)]);
+
+// Junk in, null or fewer meters out, never an exception.
+const junk = [null, undefined, 'text', 42, [], {}, { accounts: 'x' }, { accounts: [null, 5, 'x', []] },
+  { accounts: [{ active: true }] }, { accounts: [{ active: true, usage: 'x' }] },
+  { accounts: [{ active: true, usage: { fiveHour: { pct: 'lots' }, sevenDay: null, scoped: 'x' } }] }];
+is('malformed input gives null and never throws', junk.map(() => null),
+  junk.map((j) => { try { return usageLib.parse(j, U_NOW); } catch (e) { return 'threw'; } }));
+is('a junk pct drops that meter only, junk dates become null', [['hp'], [null]],
+  (() => {
+    const j = usageLib.parse({ accounts: [{ active: true, usage: {
+      fiveHour: { pct: 'x' }, sevenDay: { pct: 40, resetsAt: 'not a date', projectedExhaustionAt: [] },
+      scoped: [null, { pct: 1 }, { pct: 'y', name: 'Z' }] } }] }, U_NOW);
+    return [j.meters.map((m) => m.key), [j.meters[0].resetsAt]];
+  })());
+
+// until(): the countdown format.
+const MIN = 60000;
+is('until: under an hour, under a day, beyond', ['59m', '1h 0m', '23h 59m', '1d 0h', '4d 16h'],
+  [59 * MIN, 60 * MIN, (23 * 60 + 59) * MIN, 24 * 60 * MIN, (4 * 24 + 16) * 60 * MIN].map((ms) => usageLib.until(ms, 0)));
+is('until: past or now reads "now", null reads empty, minutes round up', ['now', 'now', '', '', '1m', '2m'],
+  [usageLib.until(-5, 0), usageLib.until(0, 0), usageLib.until(null, 0), usageLib.until(undefined, 0),
+    usageLib.until(1, 0), usageLib.until(61000, 0)]);
+
+// The poller's state machine, fed by hand.
+usageLib._reset();
+is('before any data, current() is null', null, usageLib.current(U_NOW));
+usageLib._apply(null, JSON.stringify(cswapSample()));
+is('a good answer: three meters, not stale', [3, false],
+  [usageLib.current(U_NOW).meters.length, usageLib.current(U_NOW).stale]);
+is('current() is byte-identical between calls while nothing changed', true,
+  JSON.stringify(usageLib.current(U_NOW)) === JSON.stringify(usageLib.current(U_NOW + 90 * MIN)));
+is('a failed call keeps the data and marks it stale', [3, true],
+  (() => { usageLib._apply(new Error('boom'), ''); const c = usageLib.current(U_NOW); return [c.meters.length, c.stale]; })());
+is('non-JSON output counts as a failure too', [3, true],
+  (() => { usageLib._apply(null, 'not json'); const c = usageLib.current(U_NOW); return [c.meters.length, c.stale]; })());
+is('the next good answer clears the flag', false,
+  (() => { usageLib._apply(null, JSON.stringify(cswapSample())); return usageLib.current(U_NOW).stale; })());
+is('a reset that passed while cswap was away reads as refilled', [[100, 100, 100], 'steady'],
+  (() => { const c = usageLib.current(Date.parse('2026-11-11T00:00:00Z')); return [c.meters.map((m) => m.left), c.status.kind]; })());
+is('cswap not installed: back to nothing', [null, 'missing'],
+  (() => { const code = usageLib._apply(Object.assign(new Error('x'), { code: 'ENOENT' }), ''); return [usageLib.current(U_NOW), code]; })());
+
+// fetchOnce() against a path that does not exist, and against "off".
+process.env.CLAUDE_MONITOR_CSWAP = path.join(tmpRoot, 'no-such-cswap');
+is('fetchOnce with cswap missing does not throw; current() stays null', [true, null],
+  (() => { let ok = true; try { usageLib.fetchOnce(); } catch (e) { ok = false; } return [ok, usageLib.current(U_NOW)]; })());
+process.env.CLAUDE_MONITOR_CSWAP = 'off';
+is('CLAUDE_MONITOR_CSWAP=off spawns nothing', [null],
+  (() => { usageLib.fetchOnce(); usageLib.start({ enabled: () => true }); return [usageLib.current(U_NOW)]; })());
+
+is('config: usage defaults on and turns off only with false', [true, false, true, true],
+  [configLib.sanitise(null).usage, configLib.sanitise({ usage: false }).usage,
+    configLib.sanitise({ usage: 'no' }).usage, configLib.DEFAULTS.usage]);
+is('demo usage: three meters, the same JSON on every call', [3, true],
+  [demoLib.usage().meters.length, JSON.stringify(demoLib.usage()) === JSON.stringify(demoLib.usage())]);
+
 // ---------------------------------------------------------------- render
 // The real renderer on fabricated sessions, at two widths and every grouping.
 console.log('\nrender (demo)');
 const { execFileSync } = require('child_process');
 const MONITOR = path.join(__dirname, '..', 'monitor.js');
-const board = (cols, extra, lines) => execFileSync(process.execPath, [MONITOR, '--demo', '--once', ...(extra || [])], {
+const board = (cols, extra, lines, env) => execFileSync(process.execPath, [MONITOR, '--demo', '--once', ...(extra || [])], {
   encoding: 'utf8',
-  env: { ...process.env, COLUMNS: String(cols), LINES: String(lines || ''), NO_COLOR: '' },
+  env: { ...process.env, COLUMNS: String(cols), LINES: String(lines || ''), NO_COLOR: '', ...(env || {}) },
 }).replace(/\x1b\[[0-9;]*m/g, '');
 const widest = (out) => Math.max(...out.split('\n').map((l) => text.width(l)));
 
@@ -929,6 +1236,40 @@ is('a short terminal still gets every tree line, and no "+N more"', [true, false
     const out = board(100, ['--group=none'], 22);
     return [out.includes('List the cache keys') && out.includes('impl-1'), /\+\d+ more/.test(out)];
   })());
+
+// Privacy in the table: one demo session blocked, one title-only under an alias.
+const privFile = path.join(tmpRoot, 'privacy-render.json');
+fs.writeFileSync(privFile, JSON.stringify({ sessions: {
+  'b2c3d4e5-2222-4aaa-8bbb-000000000002': { level: 'blocked' },
+  'e5f6a7b8-5555-4aaa-8bbb-000000000005': { level: 'title', alias: 'Client work' },
+} }), 'utf8');
+const privOut = board(140, [], 0, { CLAUDE_MONITOR_PRIVACY: privFile });
+is('a blocked session leaves the table and the footer counts it', [false, true],
+  [privOut.includes('double-charging'), privOut.includes('1 blocked (h to manage)')]);
+is('a title-only session shows its alias, marked, with no tree and no project', [true, false, false, false],
+  [/~ Client work/.test(privOut), privOut.includes('Migrate the auth'), privOut.includes('release-checklist'),
+    /Client work.*auth-service/.test(privOut)]);
+fs.writeFileSync(privFile, JSON.stringify({ global: true }), 'utf8');
+const globalOut = board(140, [], 0, { CLAUDE_MONITOR_PRIVACY: privFile });
+is('private mode marks every row and says so in the header', [true, false, true],
+  [/~ Invoice rounding/.test(globalOut), globalOut.includes('├─ '), globalOut.split('\n')[0].includes('private')]);
+
+// The usage line: under the brand, inside every width, and absent without cswap.
+const usageRow = (out) => out.split('\n').find((l) => l.includes('⚡')) || '';
+is('the demo board carries the usage line right under the brand', [true, true, true],
+  (() => { const l = board(120).split('\n'); return [l[0].includes('cmon'), /⚡.*❤️/.test(l[1]), l[2].startsWith('  ─')]; })());
+is('one icon per started 20, the spent ones as dots: 70 and 46 left', [true, true],
+  (() => { const l = usageRow(board(120)).replace(text.ANSI, ''); return [l.includes('⚡⚡⚡⚡·  70'), l.includes('❤️❤️❤️· ·  46')]; })());
+is('the usage line fits every width, and the whole frame still does', true,
+  [60, 70, 80, 100, 120, 160].every((cols) => {
+    const out = board(cols);
+    return text.width(usageRow(out)) > 0 && text.width(usageRow(out)) <= cols - 2 && widest(out) <= cols;
+  }));
+is('at 100 columns it keeps both meters and the verdict, at 60 only the meters', [true, false, true],
+  (() => { const a = usageRow(board(100)); const b = usageRow(board(60)); return [/HP runs out/.test(a), /HP runs out/.test(b), /⚡.*❤️/.test(b)]; })());
+is('without cswap a live (non-demo) board has no usage line', false,
+  execFileSync(process.execPath, [MONITOR, '--once'], { encoding: 'utf8', env: { ...process.env, COLUMNS: '100', NO_COLOR: '1' } })
+    .includes('⚡'));
 
 is('clipAnsi cuts a coloured line without breaking an escape', [5, true],
   (() => {
@@ -970,9 +1311,20 @@ const stop = configLib.watch((next) => { fired = next.theme; });
 
 fs.writeFileSync(watchTarget, JSON.stringify({ ...configLib.load(), theme: flipped }, null, 2) + '\n', 'utf8');
 
-setTimeout(() => {
+setTimeout(async () => {
   is(`editing config.json fires the watcher (${before} -> ${flipped})`, flipped, fired);
   stop();
+  console.log('\nweb: POST /api/privacy');
+  try {
+    const w = await webTests;
+    is('foreign Origin 403 · text/plain 415 · foreign Host 403 · bad JSON 400 · refused 400 · over 4 KB 400',
+      [403, 415, 403, 400, 400, 400], w.results.slice(0, 6));
+    is('own Origin and localhost Host: 204', [204, 204], w.results.slice(6));
+    is('only the accepted-looking bodies reach the handler', 3, w.handled);
+    is('a preflight gets no CORS allow header', [405, null], w.options);
+  } catch (e) {
+    is('the web POST tests run', 'no error', e.message);
+  }
   // Nothing to restore: the whole run happened inside the temp directory.
   console.log(`\n${passed} passed · ${failed} failed · fixtures in ${tmp}`);
   process.exit(failed ? 1 : 0);

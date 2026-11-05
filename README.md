@@ -53,8 +53,37 @@ a chat to find out what it is doing.
 | 🌳 **What its sub-agents are doing** | Every sub-agent and workflow run, as a tree under its session: each agent's own status, tool and age, and a workflow's phase and `done/total`. The IDE extension has no `/workflows`; this is the view it lacks. |
 
 It watches; it never drives. No hooks, nothing written into Claude Code's own
-directories, `settings.json` untouched. Three keys: `t` for themes, `g` for
-grouping, `a` to show or hide the agent tree.
+directories, `settings.json` untouched. Five keys: `t` for themes, `g` for
+grouping, `a` to show or hide the agent tree, `h` and `p` for [privacy](#privacy).
+
+### The usage bar
+
+The top of both boards shows what is **left** of your plan limits, as a game HUD:
+
+```text
+  ⚡⚡⚡⚡· 70 4h 9m   ❤️❤️❤️· · 46 4d 16h   📖📖📖📖📖 100 4d 16h   HP runs out Sat 21:53 at this pace
+```
+
+| Icon | Name | What it is |
+|---|---|---|
+| ⚡ | **Stamina** | the 5-hour limit |
+| ❤️ | **HP** | the weekly limit |
+| 📖 | **Fable** | that model's own weekly limit (✨ for any other model) |
+
+Each meter is 100 minus what you used, with the time until it refills beside it.
+The number is green above 50, amber above 20, red below. The page draws ten icons
+worth 10 each that empty partway, like hearts in an old adventure game, and blinks
+the last 10; the table draws five worth 20 each. On the page, the icons between what
+is left and what the week's pace allowed are tinted red ("21 over pace"), and a short
+verdict says whether the pace will last to the reset. Only the active account is
+shown. The icons are colour emoji, so the terminal needs a font and console that
+draw them (Windows Terminal does, the legacy console does not).
+
+The numbers come from the `cswap` (claude-swap) CLI, via `cswap list --json`, asked once a minute. cmon holds no token and makes no
+network call itself; if `cswap` is installed, *it* polls Anthropic's usage
+endpoint on its own schedule and answers from its cache in between. Without
+`cswap` the bar is simply not drawn. `"usage": false` in the config turns it off
+(cmon then does not run `cswap` at all).
 
 ### The web board
 
@@ -78,10 +107,16 @@ The same data as a page:
   they finish; workflows and turns that ended before cmon started are backfilled
   from Claude Code's own records. Kept in `~/.claude/monitor/timeline/<date>.jsonl`.
 - **Theme menu**: any of the 17 themes for this page only (stored in the browser).
+- **Privacy**: an eye on every card (visible · title only · block · rename), a
+  **Private** button for screen sharing, and a folded **Hidden** lane at the
+  bottom; see [Privacy](#privacy).
+- **Folding**: click any lane's heading to fold it to one line with its count;
+  the fold is remembered in the browser, so a lane you never read stays out of
+  the way. The Today panel folds the same way, and the board then takes its width.
 
 Open it in VS Code's Simple Browser (`Ctrl+Shift+P` → *Simple Browser: Show*) to
 keep it next to your chats without another window. It binds to 127.0.0.1 only,
-loads nothing from the network, pushes updates only when something changed, and
+loads nothing from the network (cmon itself makes none; see [the usage bar](#the-usage-bar)), pushes updates only when something changed, and
 draws nothing while the tab is hidden. Measured with 5 live sessions: the server
 holds ~68 MB and ~6% of one core; the page ~1 MB of JS heap. The colours follow
 the configured theme. `cmon --web --demo` serves fabricated sessions.
@@ -293,7 +328,7 @@ narrow terminal columns drop in a fixed order — `model`, `effort`, `ctx` and
 | `--no-agents` | hide the sub-agent and workflow tree (`a` brings it back) |
 | `--demo` | fabricated sessions (screenshots, testing) |
 | `--version` · `--help` | version · the usage block above |
-| `npm test` | 138 fixture assertions, no network, no deps |
+| `npm test` | 244 fixture assertions, no network, no deps |
 | `npm run config` | show or edit the config |
 | `npm run probe` | re-measure every file format this depends on |
 | `npm run screenshot` | regenerate the README images from `--demo` |
@@ -336,7 +371,8 @@ touch the config of a board you have open.
   "notifications": false,
   "showAgents": true,
   "agentLingerMs": 600000,
-  "agentIdleAfterMs": 900000
+  "agentIdleAfterMs": 900000,
+  "usage": true
 }
 ```
 
@@ -345,6 +381,48 @@ touch the config of a board you have open.
 `"notifications": true` shows a Windows balloon tip when a session moves into
 `asking` or `interrupted` — on the transition only, never on the first frame, and
 at most once a minute per session.
+
+### Privacy
+
+Some chats should not be on a screen you share. Each session has a level:
+
+| Level | Board shows |
+|---|---|
+| `visible` | everything (the default) |
+| `title` | the title, status, model, effort, context and cost — no last message, reply, activity, tool, plan, agents, project, branch or folder |
+| `blocked` | nothing: the session leaves the table and the lanes, is left out of Today and never notifies; the web board lists it under **Hidden**, where *Show* brings it back |
+
+- **Rules** hide by project: every session whose focus, project or folder contains
+  the text (case-insensitive) starts at that level, including ones you open later.
+  A session's own level wins over a rule, so *Show* on one session takes it out of
+  its rule.
+- **Alias**: a name shown instead of the real title, everywhere (table, cards,
+  Today, notifications). On the page: the eye on a card → *Rename…*. The card then
+  carries an `alias` tag, so you know the title on screen is not the real one.
+- **Private mode** (screen sharing): every visible session shows as title only;
+  blocked stays blocked. `p` in the table, the **Private** button on the page.
+- **Keys**: `h` opens a picker along the bottom — `←`/`→` through the sessions,
+  `v` visible, `t` title only, `b` block, `esc` closes. The footer counts the
+  blocked ones; title-only rows are marked `~` (`◌` with emoji glyphs).
+- **Page**: the eye on each card opens *Visible · Title only · Block · Rename…*;
+  the **Hidden** lane at the bottom (folded until you open it) lists blocked
+  sessions and the rules, with a field to add one.
+
+Everything lives in `~/.claude/monitor/privacy.json`, written atomically and
+watched like the config, so a table and a page started separately follow each
+other within a second (`CLAUDE_MONITOR_PRIVACY` points it elsewhere):
+
+```json
+{ "global": false,
+  "sessions": { "<session id>": { "level": "title", "alias": "Client work" } },
+  "rules": [ { "match": "ai-influencer", "level": "blocked" } ] }
+```
+
+Hidden content is removed inside cmon before anything is drawn or sent: the page
+never receives it, so view-source or the dev tools show nothing more than the
+card. The title stays unless you give the session an alias; cost, model, context
+and status always stay. The page's one write is `POST /api/privacy`, which accepts
+only JSON from the page's own origin and host.
 
 ### Hooks (optional)
 
@@ -372,9 +450,11 @@ and it backs up `settings.json` first.
 | `~/.claude/projects/*/<id>/workflows/` | a workflow's name (its script) and how it ended (`<runId>.json`) | read only |
 | `~/.claude/agent-dashboard/dashboard.db` | curated names, sub-agent counts (fallback) | read only, optional |
 | `~/.claude/monitor/timeline/<date>.jsonl` | the web board's "Today" column | cmon's own directory, written by `--web` |
+| `cswap list --json` | plan limits for the usage bar | optional, read only |
 | `~/.claude/tasks/<session>/*.json` | plan progress | read only |
 | `<workspace>/CLAUDE.md` | the project list for `focus` | read only |
 | `~/.claude/monitor/config.json` | configuration | read + created once |
+| `~/.claude/monitor/privacy.json` | hidden and title-only sessions, rules, aliases | cmon's own file, written by `h`/`p` and the page |
 
 Transcripts are never loaded whole: 64 KB from the tail for the title and the
 status, 128 KB from the head for the first prompt, 32 KB + 192 KB for the focus
